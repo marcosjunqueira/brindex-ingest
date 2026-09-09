@@ -7,13 +7,13 @@ server-side instead of client-side.
 
 from __future__ import annotations
 
-CODIGO_COMPRA = "PTAX:USD:COMPRA"
-CODIGO_VENDA = "PTAX:USD:VENDA"
+BUY_CODE = "PTAX:USD:BUY"
+SELL_CODE = "PTAX:USD:SELL"
 
 
-def baixar_e_normalizar(data_inicial: str, data_final: str):
+def download_and_normalize(start_date: str, end_date: str):
     """TODO: implement. GET the Olinda PTAX OData endpoint for the date range,
-    emit one point per day per (compra, venda) pair. Missing/holiday days simply
+    emit one point per day per (buy, sell) pair. Missing/holiday days simply
     produce no row for that date — never a zero or an interpolated value.
     """
     raise NotImplementedError
