@@ -25,7 +25,7 @@ browser on every use (`cornerstone-app/src/storage/bcb.ts`) with no persisted hi
 |---|---|---|---|
 | Tesouro Direto | `https://cdn.tesouro.gov.br/sistemas-internos/apex/producao/sistemas/sistd/{year}/{type}_{year}.xls` | legacy BIFF `.xls` (confirmed 2026-09-09 via `file`, NOT `.xlsx`) | One file per `type` (`LFT`, `LTN`, `NTN-B_Principal` — the source's own literal file-name tokens), one sheet per maturity, full-year daily history per sheet |
 | PTAX | BCB Olinda OData, `CotacaoDolarPeriodo` | JSON | Same endpoint already used client-side by `cornerstone-app/src/storage/bcb.ts:100-104` |
-| CDI | BCB SGS, `bcdata.sgs.4391` | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139` |
+| CDI | BCB SGS, `bcdata.sgs.4391` | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139`. Confirmed live 2026-09-09: series 4391 is **monthly**, one entry per calendar month dated the 1st (`{"data": "01/09/2026", "valor": "0.26"}`) — not daily, despite "CDI" evoking a daily rate. |
 
 Each source is ingested and can fail **independently** — a Tesouro Direto CDN outage must not
 prevent PTAX/CDI from updating, and vice versa. `main.py --source` already models this (one source at
@@ -48,6 +48,11 @@ Confirmed by downloading and opening the three current files with `xlrd`:
   contains `LFT 010326`, which matured 2026-03-01, with data through its last trading day). This is
   what makes a daily ingestion meaningful from day one: even a single run recovers a whole year of
   backfill, not just "today".
+- Tesouro Direto publishes genuinely distinct prices to invest (`PU Compra Manhã`) and to redeem
+  (`PU Venda Manhã`) — they are not interchangeable, and picking only one into a single `value` per
+  maturity/date would silently discard the other. Each row is therefore ingested as **two** points,
+  one per side — see §3.1's `:BUY`/`:SELL` identity scheme (decided during implementation planning,
+  2026-09-09).
 
 ## 3. Data model
 
@@ -78,10 +83,21 @@ explicitly deferred until the schema has changed at least once in practice.
 ### 3.1 Identity scheme
 
 `<DOMAIN>:<IDENTIFIER>`:
-- Tesouro Direto: `TD:<SERIES>:<YYYY-MM-DD>` — `<SERIES>` ∈ `{LFT, LTN, NTNB-PRINCIPAL}`, reusing the
-  exact scheme designed for cornerstone-app's own static catalog fix (kept consistent on purpose,
-  not by coincidence — see the related spec). This part of the scheme is unchanged by the
-  English-naming pass below: `TD:LFT:2026-03-01` was already language-neutral.
+- Tesouro Direto: `TD:<SERIES>:<YYYY-MM-DD>:<SIDE>` — `<SERIES>` ∈ `{LFT, LTN, NTNB-PRINCIPAL}`,
+  `<YYYY-MM-DD>` is the maturity date, `<SIDE>` ∈ `{BUY, SELL}` (e.g. `TD:LFT:2026-03-01:BUY`).
+
+  **Breaking change vs. earlier drafts, decided during implementation planning (2026-09-09):** the
+  original scheme was `TD:<SERIES>:<YYYY-MM-DD>` with no side suffix, one series per maturity,
+  deliberately kept identical to the scheme designed for `portfolio-rebalancer`'s own Tesouro Direto
+  catalog fix (`SPEC_TESOURO_DIRETO_CATALOGO_OFICIAL.md`) — kept consistent on purpose, not by
+  coincidence. That single-series-per-maturity shape forced picking either the invest price (`PU
+  Compra Manhã`) or the redeem price (`PU Venda Manhã`) into the lone `value` column, silently
+  discarding the other — so it was replaced with two series per maturity, one per side, matching how
+  PTAX already models `BUY`/`SELL`. **This intentionally breaks the naming alignment with
+  `portfolio-rebalancer`'s catalog scheme** — the two repos are still "fully decoupled" (per §0/the
+  header above; neither blocks the other), but a consumer relying on the old scheme's exact string
+  shape must be updated. `brindex-api` has not been updated to match this rename either, same as the
+  other pending renames noted in `CLAUDE.md`.
 - PTAX: `PTAX:USD:BUY` / `PTAX:USD:SELL` (previously `COMPRA` / `VENDA` — renamed for the
   English-everywhere pass; this is a stored-data breaking change, see note below).
 - CDI: `CDI:SGS:4391` (the BCB SGS series number is already a stable, public identifier).
