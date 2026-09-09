@@ -73,10 +73,11 @@ def _parse_date(cell_value: str) -> str:
 
 
 def _parse_row(row_values: list, series: str, maturity: str) -> list[TreasuryPoint]:
-    """Normalize one data row (`Dia, Taxa Compra Manhã, Taxa Venda Manhã, PU Compra
-    Manhã, PU Venda Manhã, PU Base Manhã`) into a BUY and a SELL point. Never raises on
-    a malformed cell — `scale_and_format` turns it into `None`, per the money-boundary
-    requirement (SPEC_INGESTION.md §6).
+    """Normalize one data row (`Dia` [day], `Taxa Compra Manhã` [morning buy rate],
+    `Taxa Venda Manhã` [morning sell rate], `PU Compra Manhã` [morning buy unit price],
+    `PU Venda Manhã` [morning sell unit price], `PU Base Manhã` [morning base unit price])
+    into a BUY and a SELL point. Never raises on a malformed cell — `scale_and_format`
+    turns it into `None`, per the money-boundary requirement (SPEC_INGESTION.md §6).
     """
     day_raw, buy_rate, sell_rate, buy_price, sell_price, base_price = row_values[:6]
     date = _parse_date(day_raw)
@@ -105,9 +106,18 @@ def _parse_row(row_values: list, series: str, maturity: str) -> list[TreasuryPoi
 
 def _parse_sheet(sheet: xlrd.sheet.Sheet, series: str) -> list[TreasuryPoint]:
     """Parse one sheet (one maturity) end to end. A malformed row is logged and
-    skipped — it must never abort the rest of the sheet.
+    skipped — it must never abort the rest of the sheet. Likewise a malformed maturity
+    header (cell (0, 1)) skips only this sheet, not the whole download.
     """
-    maturity = _parse_date(sheet.cell_value(0, 1))
+    try:
+        maturity = _parse_date(sheet.cell_value(0, 1))
+    except Exception:
+        logger.warning(
+            "treasury: skipping sheet %r with malformed maturity cell (0,1): %r",
+            sheet.name,
+            sheet.cell_value(0, 1),
+        )
+        return []
     points: list[TreasuryPoint] = []
     for row_index in range(2, sheet.nrows):
         row_values = sheet.row_values(row_index)
@@ -126,14 +136,27 @@ def _parse_sheet(sheet: xlrd.sheet.Sheet, series: str) -> list[TreasuryPoint]:
 def download_and_normalize(
     year: int, session: requests.Session | None = None
 ) -> list[TreasuryPoint]:
-    """Download every Tesouro Direto XLS for `year` and normalize all sheets into points."""
-    http = session or requests
+    """Download every Tesouro Direto XLS for `year` and normalize all sheets into points.
+    A single `Session` is reused across all 3 downloads (same CDN host) to avoid a fresh
+    TCP+TLS handshake per file. Each of the 3 XLS types is independent: a download/parse
+    failure on one type is logged and skipped rather than discarding the other two.
+    """
+    http = session or requests.Session()
     points: list[TreasuryPoint] = []
     for url_token, series in TYPES.items():
         url = CDN_URL_TEMPLATE.format(year=year, url_token=url_token)
-        response = http.get(url, timeout=30)
-        response.raise_for_status()
-        workbook = xlrd.open_workbook(file_contents=response.content)
+        try:
+            response = http.get(url, timeout=30)
+            response.raise_for_status()
+            workbook = xlrd.open_workbook(file_contents=response.content)
+        except Exception:
+            logger.warning(
+                "treasury: skipping %s (year %d) — download/parse failed",
+                url_token,
+                year,
+                exc_info=True,
+            )
+            continue
         for sheet in workbook.sheets():
             points.extend(_parse_sheet(sheet, series))
     return points

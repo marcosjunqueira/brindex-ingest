@@ -9,10 +9,16 @@ Confirmed live (2026-09-09): returns `[{"data": "01/09/2026", "valor": "0.26"}, 
 
 from __future__ import annotations
 
+import json
+import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 CODE = "CDI:SGS:4391"
 
@@ -27,18 +33,26 @@ class CdiPoint:
 
 def _parse_cdi_payload(payload: list[dict]) -> list[CdiPoint]:
     """Normalize an already-decoded SGS response. `valor` is passed through byte-for-byte
-    when it parses as a number (never round-tripped through `float`); otherwise `None`.
+    when it parses as a finite number (never round-tripped through `float` for storage);
+    otherwise `None`. A malformed entry (bad/missing date) is logged and skipped rather
+    than aborting the whole payload.
     """
     points: list[CdiPoint] = []
     for entry in payload:
-        date = datetime.strptime(entry["data"], "%d/%m/%Y").strftime("%Y-%m-%d")
+        try:
+            date = datetime.strptime(entry["data"], "%d/%m/%Y").strftime("%Y-%m-%d")
+        except (KeyError, TypeError, ValueError):
+            logger.warning("cdi: skipping malformed entry: %r", entry)
+            continue
         valor = entry.get("valor")
         try:
-            float(valor)
+            numeric = float(valor)
         except (TypeError, ValueError):
             value = None
         else:
-            value = valor
+            # `math.isfinite` rejects "nan"/"inf"/"-Infinity" strings, which Python's
+            # permissive float() grammar would otherwise accept and store verbatim.
+            value = str(valor) if math.isfinite(numeric) else None
         points.append(CdiPoint(date=date, value=value))
     return points
 
@@ -64,4 +78,5 @@ def download_and_normalize(
         timeout=30,
     )
     response.raise_for_status()
-    return _parse_cdi_payload(response.json())
+    payload = json.loads(response.text, parse_float=Decimal)
+    return _parse_cdi_payload(payload)

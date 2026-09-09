@@ -10,6 +10,7 @@ from that integer via integer arithmetic.
 from __future__ import annotations
 
 import math
+from decimal import ROUND_HALF_UP, Decimal
 
 
 def scale_and_format(value: float | int | str | None, decimals: int) -> str | None:
@@ -19,6 +20,11 @@ def scale_and_format(value: float | int | str | None, decimals: int) -> str | No
     see `sources/treasury.py`). Blank XLS cells surface as `''`; `None` and non-finite floats
     (`nan`/`inf`, which `xlrd` never actually produces but which would otherwise corrupt the
     scaled integer) are treated the same way.
+
+    Rounds via `Decimal(repr(numeric))` — `repr()` gives the shortest decimal string that
+    round-trips to the same float — rather than `numeric * 10**decimals`, which adds its own
+    float multiplication error on top of the rounding mode and can misround values landing
+    near an exact half-unit boundary at the target decimal place.
     """
     if value is None or value == "":
         return None
@@ -29,12 +35,6 @@ def scale_and_format(value: float | int | str | None, decimals: int) -> str | No
     if not math.isfinite(numeric):
         return None
 
-    scale = 10**decimals
-    scaled = round(numeric * scale)
-    sign = "-" if scaled < 0 else ""
-    scaled_abs = abs(scaled)
-    int_part = scaled_abs // scale
-    if decimals == 0:
-        return f"{sign}{int_part}"
-    frac_part = str(scaled_abs % scale).zfill(decimals)
-    return f"{sign}{int_part}.{frac_part}"
+    quantum = Decimal(1).scaleb(-decimals)
+    quantized = Decimal(repr(numeric)).quantize(quantum, rounding=ROUND_HALF_UP)
+    return format(quantized, "f")

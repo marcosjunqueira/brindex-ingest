@@ -8,6 +8,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -134,7 +135,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--since",
-        type=str,
+        type=_iso_date,
         default=None,
         help="Start date (YYYY-MM-DD) for PTAX/CDI ingestion. Defaults to 30 days before today; "
         "pass an earlier date (e.g. 2020-01-01) to backfill on a first run. Ignored by "
@@ -143,13 +144,14 @@ def main() -> None:
     args = parser.parse_args()
 
     today = datetime.now(timezone.utc).date()
-    since = args.since or (today - timedelta(days=30)).isoformat()
+    since = args.since if args.since is not None else (today - timedelta(days=30)).isoformat()
     until = today.isoformat()
 
     conn = connect(args.db)
 
     sources = ["treasury-direct", "ptax", "cdi"] if args.source == "all" else [args.source]
 
+    failed_sources: list[str] = []
     for source in sources:
         try:
             if source == "treasury-direct":
@@ -161,7 +163,19 @@ def main() -> None:
             conn.commit()
         except Exception:
             conn.rollback()
+            failed_sources.append(source)
             logger.exception("ingestion failed for source %r; continuing with other sources", source)
+
+    if failed_sources:
+        logger.error("ingestion run failed for source(s): %s", ", ".join(failed_sources))
+        sys.exit(1)
+
+
+def _iso_date(value: str) -> str:
+    """Validate `--since` eagerly at the argparse layer, so a typo'd date fails loudly
+    instead of being caught and logged as an ordinary per-source ingestion failure."""
+    datetime.strptime(value, "%Y-%m-%d")
+    return value
 
 
 if __name__ == "__main__":

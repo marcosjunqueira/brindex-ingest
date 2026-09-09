@@ -13,11 +13,15 @@ Confirmed live (2026-09-09): `CotacaoDolarPeriodo` returns
 from __future__ import annotations
 
 import json
+import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 BUY_CODE = "PTAX:USD:BUY"
 SELL_CODE = "PTAX:USD:SELL"
@@ -35,17 +39,40 @@ class PtaxPoint:
     value: str | None
 
 
+def _clean_rate(value: object) -> str | None:
+    """`None`/blank/non-numeric becomes `None`. Also guards `NaN`/`Infinity`: those JSON
+    tokens aren't intercepted by `parse_float=Decimal` (they go through `parse_constant`
+    as plain `float`s instead), so without this check they'd be stored as the literal
+    string `"nan"`/`"inf"` — exactly the sentinel SPEC_INGESTION.md §6 forbids.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return str(value) if value.is_finite() else None
+    if isinstance(value, float):
+        return str(value) if math.isfinite(value) else None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return str(value) if math.isfinite(numeric) else None
+
+
 def _parse_ptax_payload(payload: dict) -> list[PtaxPoint]:
     """Normalize an already-decoded Olinda response (decoded with
     `json.loads(text, parse_float=Decimal)` so buy/sell rates never touch `float`).
     """
     points: list[PtaxPoint] = []
     for entry in payload.get("value", []):
-        date = entry["dataHoraCotacao"].split(" ")[0]
+        try:
+            date = entry["dataHoraCotacao"].split(" ")[0]
+        except (KeyError, AttributeError, TypeError):
+            logger.warning("ptax: skipping malformed entry: %r", entry)
+            continue
         buy = entry.get("cotacaoCompra")
         sell = entry.get("cotacaoVenda")
-        points.append(PtaxPoint(code=BUY_CODE, date=date, value=str(buy) if buy is not None else None))
-        points.append(PtaxPoint(code=SELL_CODE, date=date, value=str(sell) if sell is not None else None))
+        points.append(PtaxPoint(code=BUY_CODE, date=date, value=_clean_rate(buy)))
+        points.append(PtaxPoint(code=SELL_CODE, date=date, value=_clean_rate(sell)))
     return points
 
 

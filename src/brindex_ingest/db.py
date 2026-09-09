@@ -37,7 +37,23 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA_SQL)
+    _check_schema(conn, db_path)
     return conn
+
+
+def _check_schema(conn: sqlite3.Connection, db_path: Path) -> None:
+    """`CREATE TABLE IF NOT EXISTS` can't retroactively relax `NOT NULL` on a database
+    created before `points.value` was made nullable (SPEC_INGESTION.md's money-boundary
+    fix) — fail loudly here instead of surfacing a generic IntegrityError deep inside a
+    later ingestion run."""
+    for row in conn.execute("PRAGMA table_info(points)"):
+        name, notnull = row[1], row[3]
+        if name == "value" and notnull:
+            raise RuntimeError(
+                f"{db_path}: points.value is NOT NULL, which predates this project's "
+                "money-boundary fix (a missing/malformed source value must be storable "
+                "as NULL). Recreate the database file — there is no migration tool yet."
+            )
 
 
 class PointRow(NamedTuple):

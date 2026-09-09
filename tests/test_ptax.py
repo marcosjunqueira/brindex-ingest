@@ -33,3 +33,34 @@ def test_values_are_clean_decimal_strings() -> None:
 
     for value in values.values():
         assert "e" not in value.lower()
+
+
+def test_money_boundary_non_numeric_value_becomes_none() -> None:
+    payload = json.loads(
+        '{"value": [{"cotacaoCompra": "N/A", "cotacaoVenda": 5.0860, '
+        '"dataHoraCotacao": "2026-09-08 13:02:38.447299"}]}',
+        parse_float=Decimal,
+    )
+    points = _parse_ptax_payload(payload)
+    by_code = {p.code: p.value for p in points}
+
+    assert by_code[BUY_CODE] is None
+    assert by_code[SELL_CODE] == "5.0860"
+
+
+def test_money_boundary_nan_becomes_none() -> None:
+    payload = json.loads(
+        '{"value": [{"cotacaoCompra": NaN, "cotacaoVenda": Infinity, '
+        '"dataHoraCotacao": "2026-09-08 13:02:38.447299"}]}',
+        parse_float=Decimal,
+    )
+    points = _parse_ptax_payload(payload)
+    by_code = {p.code: p.value for p in points}
+
+    assert by_code[BUY_CODE] is None
+    assert by_code[SELL_CODE] is None
+
+
+def test_malformed_entry_is_skipped_not_fatal() -> None:
+    payload = {"value": [{"cotacaoCompra": 5.0}]}
+    assert _parse_ptax_payload(payload) == []
