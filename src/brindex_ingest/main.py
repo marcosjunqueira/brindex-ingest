@@ -42,7 +42,7 @@ def _ingest_treasury(conn, years: list[int]) -> None:
                 conn,
                 code=code,
                 domain="treasury-direct",
-                name=f"Tesouro Direto {point.series} {point.maturity} ({point.side})",
+                name=treasury.display_name(point.series, point.maturity, point.side),
                 metadata={"maturity": point.maturity, "series": point.series, "side": point.side},
                 created_at=now,
             )

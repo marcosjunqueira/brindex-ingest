@@ -23,7 +23,7 @@ browser on every use (`cornerstone-app/src/storage/bcb.ts`) with no persisted hi
 
 | Domain | Endpoint | Format | Notes |
 |---|---|---|---|
-| Tesouro Direto | `https://cdn.tesouro.gov.br/sistemas-internos/apex/producao/sistemas/sistd/{year}/{type}_{year}.xls` | legacy BIFF `.xls` (confirmed 2026-09-09 via `file`, NOT `.xlsx`) | One file per `type` (`LFT`, `LTN`, `NTN-B_Principal` — the source's own literal file-name tokens), one sheet per maturity, full-year daily history per sheet |
+| Tesouro Direto | `https://cdn.tesouro.gov.br/sistemas-internos/apex/producao/sistemas/sistd/{year}/{type}_{year}.xls` | legacy BIFF `.xls` (confirmed 2026-09-09 via `file`, NOT `.xlsx`) | One file per `type` (`LFT`, `LTN`, `NTN-B_Principal`, `NTN-B`, `NTN-F` — the source's own literal file-name tokens), one sheet per maturity, full-year daily history per sheet |
 | PTAX | BCB Olinda OData, `CotacaoDolarPeriodo` | JSON | Same endpoint already used client-side by `cornerstone-app/src/storage/bcb.ts:100-104` |
 | CDI | BCB SGS, `bcdata.sgs.4391` | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139`. Confirmed live 2026-09-09: series 4391 is **monthly**, one entry per calendar month dated the 1st (`{"data": "01/09/2026", "valor": "0.26"}`) — not daily, despite "CDI" evoking a daily rate. |
 
@@ -33,7 +33,7 @@ a time, or `all`).
 
 ### 2.1 Tesouro Direto XLS structure (verified, not assumed)
 
-Confirmed by downloading and opening the three current files with `xlrd`:
+Confirmed by downloading and opening all five current files with `xlrd`:
 - Sheet names encode series + maturity: `"LFT 010326"` = LFT maturing 2026-03-01.
 - Cell `(0, 1)` of every sheet holds the maturity date explicitly (`"Vencimento"` / `"01/03/2026"` —
   "maturity date", the source's literal Portuguese header) — **use this cell as the source of truth
@@ -99,7 +99,7 @@ does not retroactively relax an existing table's `NOT NULL`) — there is no mig
 ### 3.1 Identity scheme
 
 `<DOMAIN>:<IDENTIFIER>`:
-- Tesouro Direto: `TD:<SERIES>:<YYYY-MM-DD>:<SIDE>` — `<SERIES>` ∈ `{LFT, LTN, NTNB-PRINCIPAL}`,
+- Tesouro Direto: `TD:<SERIES>:<YYYY-MM-DD>:<SIDE>` — `<SERIES>` ∈ `{LFT, LTN, NTNB-PRINCIPAL, NTNB, NTNF}`,
   `<YYYY-MM-DD>` is the maturity date, `<SIDE>` ∈ `{BUY, SELL}` (e.g. `TD:LFT:2026-03-01:BUY`).
 
   **Breaking change vs. earlier drafts, decided during implementation planning (2026-09-09):** the
@@ -174,9 +174,9 @@ enforced at the parser boundary (`sources/*.py`), before a row ever reaches `db.
 
 - `tests/test_db.py` — schema creation, implemented and passing.
 - Each source parser needs unit tests against **fixture files**, never live network calls in CI:
-  - Tesouro Direto: the three `.xls` files downloaded during this spec's design session are the
-    first candidate fixtures (not yet committed to `tests/fixtures/` — do so before implementing
-    `sources/treasury.py`, keeping file size in mind: ~100–160 KB each, acceptable to commit).
+  - Tesouro Direto: the `.xls` files downloaded during this spec's design session and during later
+    series additions are the fixtures (committed to `tests/fixtures/`), keeping file size in mind:
+    ~100–225 KB each, acceptable to commit.
   - PTAX/CDI: a captured JSON response per endpoint, small and easy to fixture.
 - Idempotency test: running ingestion for the same source and date range twice must leave `points`
   with exactly the same row count as running it once (no duplicates), and update `value` if the

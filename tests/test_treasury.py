@@ -55,6 +55,28 @@ def test_ltn_and_ntnb_fixtures_parse_without_error() -> None:
     assert len(ntnb_points) > 0
 
 
+def test_ntnb_and_ntnf_fixtures_parse_without_error() -> None:
+    ntnb_points = _parse_fixture("NTN-B_2026.xls", "NTN-B 150826", "NTNB")
+    ntnf_points = _parse_fixture("NTN-F_2026.xls", "NTN-F 010127", "NTNF")
+    assert len(ntnb_points) > 0
+    assert len(ntnf_points) > 0
+    assert ntnb_points[0].series == "NTNB"
+    assert ntnb_points[0].maturity == "2026-08-15"
+    assert ntnf_points[0].series == "NTNF"
+    assert ntnf_points[0].maturity == "2027-01-01"
+
+
+def test_every_series_has_a_popular_name() -> None:
+    assert set(treasury.SERIES_POPULAR_NAME) == set(treasury.TYPES.values())
+
+
+def test_display_name_format() -> None:
+    assert (
+        treasury.display_name("LFT", "2031-03-01", "BUY")
+        == "Tesouro Selic 2031-03-01 (LFT, BUY)"
+    )
+
+
 def test_money_boundary_blank_cell_becomes_none() -> None:
     row = ["02/01/2026", "", 0.000264, 18105.3, "", 18094.98]
     buy, sell = treasury._parse_row(row, "LFT", "2026-03-01")
