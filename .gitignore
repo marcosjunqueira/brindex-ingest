@@ -23,3 +23,6 @@ venv/
 
 # OS
 .DS_Store
+
+# LibreOffice/OpenOffice lock files (left behind when a .xls fixture is opened to inspect it)
+.~lock.*#
