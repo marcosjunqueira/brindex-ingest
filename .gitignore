@@ -17,6 +17,9 @@ venv/
 *.xlsx
 !tests/fixtures/**
 
+# local environment variables
+.env
+
 # IDE
 .idea/
 .vscode/
