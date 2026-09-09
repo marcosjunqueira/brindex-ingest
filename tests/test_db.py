@@ -9,4 +9,4 @@ def test_connect_creates_schema(tmp_path: Path) -> None:
         row[0]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
-    assert {"series", "pontos"} <= tables
+    assert {"series", "points"} <= tables

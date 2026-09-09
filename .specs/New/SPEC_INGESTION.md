@@ -23,23 +23,26 @@ browser on every use (`cornerstone-app/src/storage/bcb.ts`) with no persisted hi
 
 | Domain | Endpoint | Format | Notes |
 |---|---|---|---|
-| Tesouro Direto | `https://cdn.tesouro.gov.br/sistemas-internos/apex/producao/sistemas/sistd/{ano}/{tipo}_{ano}.xls` | legacy BIFF `.xls` (confirmed 2026-09-09 via `file`, NOT `.xlsx`) | One file per `tipo` (`LFT`, `LTN`, `NTN-B_Principal`), one sheet per maturity, full-year daily history per sheet |
+| Tesouro Direto | `https://cdn.tesouro.gov.br/sistemas-internos/apex/producao/sistemas/sistd/{year}/{type}_{year}.xls` | legacy BIFF `.xls` (confirmed 2026-09-09 via `file`, NOT `.xlsx`) | One file per `type` (`LFT`, `LTN`, `NTN-B_Principal` — the source's own literal file-name tokens), one sheet per maturity, full-year daily history per sheet |
 | PTAX | BCB Olinda OData, `CotacaoDolarPeriodo` | JSON | Same endpoint already used client-side by `cornerstone-app/src/storage/bcb.ts:100-104` |
 | CDI | BCB SGS, `bcdata.sgs.4391` | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139` |
 
 Each source is ingested and can fail **independently** — a Tesouro Direto CDN outage must not
-prevent PTAX/CDI from updating, and vice versa. `main.py --fonte` already models this (one source at
-a time, or `todas`).
+prevent PTAX/CDI from updating, and vice versa. `main.py --source` already models this (one source at
+a time, or `all`).
 
 ### 2.1 Tesouro Direto XLS structure (verified, not assumed)
 
 Confirmed by downloading and opening the three current files with `xlrd`:
-- Sheet names encode série + vencimento: `"LFT 010326"` = LFT maturing 2026-03-01.
-- Cell `(0, 1)` of every sheet holds the maturity date explicitly (`"Vencimento"` / `"01/03/2026"`)
-  — **use this cell as the source of truth for the date**, not a parse of the sheet name; they agree
-  today but the cell is the more direct signal.
-- Row 1 is the header: `Dia, Taxa Compra Manhã, Taxa Venda Manhã, PU Compra Manhã, PU Venda Manhã,
-  PU Base Manhã`. Data starts at row 2.
+- Sheet names encode series + maturity: `"LFT 010326"` = LFT maturing 2026-03-01.
+- Cell `(0, 1)` of every sheet holds the maturity date explicitly (`"Vencimento"` / `"01/03/2026"` —
+  "maturity date", the source's literal Portuguese header) — **use this cell as the source of truth
+  for the date**, not a parse of the sheet name; they agree today but the cell is the more direct
+  signal.
+- Row 1 is the header (source's literal Portuguese column names): `Dia` (day), `Taxa Compra Manhã`
+  (morning buy rate), `Taxa Venda Manhã` (morning sell rate), `PU Compra Manhã` (morning buy unit
+  price), `PU Venda Manhã` (morning sell unit price), `PU Base Manhã` (morning base unit price). Data
+  starts at row 2.
 - Each sheet holds the **full calendar-year daily history** for that maturity, not just the current
   day — including maturities that already expired within the year (e.g. `LFT_2026.xls` still
   contains `LFT 010326`, which matured 2026-03-01, with data through its last trading day). This is
@@ -50,20 +53,20 @@ Confirmed by downloading and opening the three current files with `xlrd`:
 
 ```sql
 CREATE TABLE series (
-  codigo        TEXT PRIMARY KEY,   -- 'TD:LFT:2026-03-01' | 'PTAX:USD:VENDA' | 'CDI:SGS:4391'
-  dominio       TEXT NOT NULL,      -- 'tesouro-direto' | 'ptax' | 'cdi'
-  nome          TEXT NOT NULL,
-  metadados     TEXT NOT NULL,      -- opaque JSON, domain-specific (vencimento/moeda/etc.)
-  criado_em     TEXT NOT NULL
+  code          TEXT PRIMARY KEY,   -- 'TD:LFT:2026-03-01' | 'PTAX:USD:SELL' | 'CDI:SGS:4391'
+  domain        TEXT NOT NULL,      -- 'treasury-direct' | 'ptax' | 'cdi'
+  name          TEXT NOT NULL,
+  metadata      TEXT NOT NULL,      -- opaque JSON, domain-specific (maturity/currency/etc.)
+  created_at    TEXT NOT NULL
 );
 
-CREATE TABLE pontos (
-  serie_codigo  TEXT NOT NULL REFERENCES series(codigo),
-  data          TEXT NOT NULL,      -- YYYY-MM-DD
-  valor         TEXT NOT NULL,      -- decimal as STRING, never float — see §6
-  valores_extra TEXT,               -- optional JSON: e.g. Tesouro's compra/venda alongside base
-  fonte_atualizado_em TEXT NOT NULL,
-  PRIMARY KEY (serie_codigo, data)
+CREATE TABLE points (
+  series_code   TEXT NOT NULL REFERENCES series(code),
+  date          TEXT NOT NULL,      -- YYYY-MM-DD
+  value         TEXT NOT NULL,      -- decimal as STRING, never float — see §6
+  extra_values  TEXT,               -- optional JSON: e.g. Treasury's buy/sell alongside base
+  source_updated_at TEXT NOT NULL,
+  PRIMARY KEY (series_code, date)
 );
 ```
 
@@ -74,26 +77,35 @@ explicitly deferred until the schema has changed at least once in practice.
 
 ### 3.1 Identity scheme
 
-`<DOMINIO>:<IDENTIFICADOR>`:
-- Tesouro Direto: `TD:<SERIE>:<AAAA-MM-DD>` — `<SERIE>` ∈ `{LFT, LTN, NTNB-PRINCIPAL}`, reusing the
+`<DOMAIN>:<IDENTIFIER>`:
+- Tesouro Direto: `TD:<SERIES>:<YYYY-MM-DD>` — `<SERIES>` ∈ `{LFT, LTN, NTNB-PRINCIPAL}`, reusing the
   exact scheme designed for cornerstone-app's own static catalog fix (kept consistent on purpose,
-  not by coincidence — see the related spec).
-- PTAX: `PTAX:USD:COMPRA` / `PTAX:USD:VENDA`.
+  not by coincidence — see the related spec). This part of the scheme is unchanged by the
+  English-naming pass below: `TD:LFT:2026-03-01` was already language-neutral.
+- PTAX: `PTAX:USD:BUY` / `PTAX:USD:SELL` (previously `COMPRA` / `VENDA` — renamed for the
+  English-everywhere pass; this is a stored-data breaking change, see note below).
 - CDI: `CDI:SGS:4391` (the BCB SGS series number is already a stable, public identifier).
 
-`codigo_canonico()` for Tesouro Direto is implemented in `sources/tesouro.py`; PTAX/CDI's constants
+`canonical_code()` for Tesouro Direto is implemented in `sources/treasury.py`; PTAX/CDI's constants
 are module-level in their own files (no function needed — they're each a fixed pair/singleton, not a
 family parameterized by maturity).
 
+**Breaking change vs. earlier drafts of this spec:** table/column names, the `--fonte` CLI flag, and
+the `series.domain` value `tesouro-direto` were originally Portuguese (`pontos`, `codigo`, `dominio`,
+`nome`, `metadados`, `criado_em`, `serie_codigo`, `data`, `valor`, `valores_extra`,
+`fonte_atualizado_em`). They have been renamed to English throughout this repo (schema, CLI, source
+modules). `brindex-api` must apply the same renames before either repo touches a shared database —
+this has not yet happened outside this repo.
+
 ## 4. Idempotency and upserts
 
-`(serie_codigo, data)` is the primary key of `pontos` — re-running ingestion for a date already
+`(series_code, date)` is the primary key of `points` — re-running ingestion for a date already
 present must **overwrite**, not error or duplicate. This matters concretely for Tesouro Direto: the
-"PU Base Manhã" published early in the day can be revised later, so a same-day re-run should pick up
-the correction. Not yet implemented (the `main.py` CLI stops at `connect()` and raises
-`NotImplementedError`) — when it is, the upsert must be a real `INSERT ... ON CONFLICT DO UPDATE`,
-not a delete-then-insert (which would create a window with no row, however brief, that a concurrent
-`brindex-api` read could observe).
+"PU Base Manhã" (morning base unit price) published early in the day can be revised later, so a
+same-day re-run should pick up the correction. Not yet implemented (the `main.py` CLI stops at
+`connect()` and raises `NotImplementedError`) — when it is, the upsert must be a real
+`INSERT ... ON CONFLICT DO UPDATE`, not a delete-then-insert (which would create a window with no
+row, however brief, that a concurrent `brindex-api` read could observe).
 
 ## 5. Scheduling and deployment (open question, not resolved here)
 
@@ -105,7 +117,7 @@ This process needs to run daily. Candidates, not decided:
 - A small VPS or a home device (Raspberry Pi) dedicated to this and possibly other personal
   services.
 
-Whichever is chosen, the job is a single CLI invocation (`brindex-ingest --fonte todas`) — the
+Whichever is chosen, the job is a single CLI invocation (`brindex-ingest --source all`) — the
 scheduling mechanism is infrastructure, not application code, and doesn't change anything in this
 repo.
 
@@ -122,13 +134,13 @@ enforced at the parser boundary (`sources/*.py`), before a row ever reaches `db.
 - Each source parser needs unit tests against **fixture files**, never live network calls in CI:
   - Tesouro Direto: the three `.xls` files downloaded during this spec's design session are the
     first candidate fixtures (not yet committed to `tests/fixtures/` — do so before implementing
-    `sources/tesouro.py`, keeping file size in mind: ~100–160 KB each, acceptable to commit).
+    `sources/treasury.py`, keeping file size in mind: ~100–160 KB each, acceptable to commit).
   - PTAX/CDI: a captured JSON response per endpoint, small and easy to fixture.
-- Idempotency test: running ingestion for the same source and date range twice must leave `pontos`
-  with exactly the same row count as running it once (no duplicates), and update `valor` if the
+- Idempotency test: running ingestion for the same source and date range twice must leave `points`
+  with exactly the same row count as running it once (no duplicates), and update `value` if the
   fixture's second run carries a different (corrected) value.
 - Money-boundary test (per §6): a fixture row with an empty/malformed price cell must produce a
-  `NULL` `valor` in the database, never a crash or a silently wrong number.
+  `NULL` `value` in the database, never a crash or a silently wrong number.
 
 ## 8. Non-goals for v1
 

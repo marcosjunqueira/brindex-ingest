@@ -1,6 +1,6 @@
 """SQLite schema and connection helper shared by every source's ingestion.
 
-Schema mirrors the design in `.specs/New/SPEC_INGESTAO.md` and is read, unmodified,
+Schema mirrors the design in `.specs/New/SPEC_INGESTION.md` and is read, unmodified,
 by the sibling `brindex-api` repo — the two must stay in sync by hand until this
 schema is stable enough to version formally.
 """
@@ -12,20 +12,20 @@ from pathlib import Path
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS series (
-  codigo        TEXT PRIMARY KEY,
-  dominio       TEXT NOT NULL,
-  nome          TEXT NOT NULL,
-  metadados     TEXT NOT NULL,
-  criado_em     TEXT NOT NULL
+  code          TEXT PRIMARY KEY,
+  domain        TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  metadata      TEXT NOT NULL,
+  created_at    TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS pontos (
-  serie_codigo  TEXT NOT NULL REFERENCES series(codigo),
-  data          TEXT NOT NULL,
-  valor         TEXT NOT NULL,
-  valores_extra TEXT,
-  fonte_atualizado_em TEXT NOT NULL,
-  PRIMARY KEY (serie_codigo, data)
+CREATE TABLE IF NOT EXISTS points (
+  series_code   TEXT NOT NULL REFERENCES series(code),
+  date          TEXT NOT NULL,
+  value         TEXT NOT NULL,
+  extra_values  TEXT,
+  source_updated_at TEXT NOT NULL,
+  PRIMARY KEY (series_code, date)
 );
 """
 

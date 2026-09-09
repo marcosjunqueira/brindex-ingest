@@ -5,7 +5,7 @@ historical time-series SQLite database, read by [`brindex-api`](https://github.c
 
 ## Status
 
-Early scaffold. Schema and CLI wired up; the three source parsers (`sources/tesouro.py`,
+Early scaffold. Schema and CLI wired up; the three source parsers (`sources/treasury.py`,
 `sources/ptax.py`, `sources/cdi.py`) are stubs (`raise NotImplementedError`). See
 [`.specs/`](.specs/) for the design.
 
@@ -13,9 +13,9 @@ Early scaffold. Schema and CLI wired up; the three source parsers (`sources/teso
 
 | Domain | Source | Format |
 |---|---|---|
-| Tesouro Direto | `cdn.tesouro.gov.br/.../{TIPO}_{ano}.xls` | legacy XLS (BIFF) |
+| Tesouro Direto | `cdn.tesouro.gov.br/.../{type}_{year}.xls` | legacy XLS (BIFF) |
 | PTAX | BCB Olinda OData | JSON |
-| CDI | BCB SGS série 4391 | JSON |
+| CDI | BCB SGS series 4391 | JSON |
 
 ## Running
 
@@ -23,7 +23,7 @@ Early scaffold. Schema and CLI wired up; the three source parsers (`sources/teso
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest
-.venv/bin/brindex-ingest --db brindex.sqlite --fonte tesouro-direto
+.venv/bin/brindex-ingest --db brindex.sqlite --source treasury-direct
 ```
 
 ## License

@@ -1,5 +1,5 @@
 """CLI entrypoint. Meant to be invoked daily by cron/systemd timer — see
-`.specs/New/SPEC_INGESTAO.md` §5 for the (still open) deployment question.
+`.specs/New/SPEC_INGESTION.md` §5 for the (still open) deployment question.
 """
 
 from __future__ import annotations
@@ -19,15 +19,15 @@ def main() -> None:
         help="Path to the SQLite database file (shared with brindex-api).",
     )
     parser.add_argument(
-        "--fonte",
-        choices=["tesouro-direto", "ptax", "cdi", "todas"],
-        default="todas",
+        "--source",
+        choices=["treasury-direct", "ptax", "cdi", "all"],
+        default="all",
         help="Which source to ingest. Each source fails independently.",
     )
     args = parser.parse_args()
 
     connect(args.db)
-    raise NotImplementedError("wire up sources.tesouro / sources.ptax / sources.cdi here")
+    raise NotImplementedError("wire up sources.treasury / sources.ptax / sources.cdi here")
 
 
 if __name__ == "__main__":
