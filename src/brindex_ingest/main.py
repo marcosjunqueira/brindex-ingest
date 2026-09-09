@@ -22,37 +22,43 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _ingest_treasury(conn) -> None:
-    year = datetime.now(timezone.utc).year
-    points = treasury.download_and_normalize(year)
+def _ingest_treasury(conn, years: list[int]) -> None:
     now = _now_iso()
-    seen_codes: set[str] = set()
-    for point in points:
-        code = treasury.canonical_code(point.series, point.maturity, point.side)
-        if code in seen_codes:
-            continue
-        seen_codes.add(code)
-        upsert_series(
-            conn,
-            code=code,
-            domain="treasury-direct",
-            name=f"Tesouro Direto {point.series} {point.maturity} ({point.side})",
-            metadata={"maturity": point.maturity, "series": point.series, "side": point.side},
-            created_at=now,
-        )
-    upsert_points(
-        conn,
-        (
-            PointRow(
-                series_code=treasury.canonical_code(point.series, point.maturity, point.side),
-                date=point.date,
-                value=point.price,
-                extra_values=json.dumps({"rate": point.rate, "base_price": point.base_price}),
-                source_updated_at=now,
+    for year in years:
+        try:
+            points = treasury.download_and_normalize(year)
+        except Exception:
+            logger.exception(
+                "treasury: skipping year %d — download/parse failed for the whole year", year
             )
-            for point in points
-        ),
-    )
+            continue
+        seen_codes: set[str] = set()
+        for point in points:
+            code = treasury.canonical_code(point.series, point.maturity, point.side)
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            upsert_series(
+                conn,
+                code=code,
+                domain="treasury-direct",
+                name=f"Tesouro Direto {point.series} {point.maturity} ({point.side})",
+                metadata={"maturity": point.maturity, "series": point.series, "side": point.side},
+                created_at=now,
+            )
+        upsert_points(
+            conn,
+            (
+                PointRow(
+                    series_code=treasury.canonical_code(point.series, point.maturity, point.side),
+                    date=point.date,
+                    value=point.price,
+                    extra_values=json.dumps({"rate": point.rate, "base_price": point.base_price}),
+                    source_updated_at=now,
+                )
+                for point in points
+            ),
+        )
 
 
 def _ingest_ptax(conn, since: str, until: str) -> None:
@@ -139,13 +145,37 @@ def main() -> None:
         default=None,
         help="Start date (YYYY-MM-DD) for PTAX/CDI ingestion. Defaults to 30 days before today; "
         "pass an earlier date (e.g. 2020-01-01) to backfill on a first run. Ignored by "
-        "treasury-direct, which always ingests the current calendar year's full XLS history.",
+        "treasury-direct, which uses --year/--since-year instead.",
+    )
+    year_group = parser.add_mutually_exclusive_group()
+    year_group.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Ingest treasury-direct for this single calendar year only (each Tesouro Direto "
+        "XLS is published per-year by the CDN). Defaults to the current year. Mutually "
+        "exclusive with --since-year. Ignored by ptax/cdi.",
+    )
+    year_group.add_argument(
+        "--since-year",
+        type=int,
+        default=None,
+        help="Ingest treasury-direct for every calendar year from this one through the "
+        "current year, inclusive (one CDN request per year) — use to backfill years before "
+        "the current one, e.g. --since-year 2020. Mutually exclusive with --year. Ignored "
+        "by ptax/cdi.",
     )
     args = parser.parse_args()
 
     today = datetime.now(timezone.utc).date()
     since = args.since if args.since is not None else (today - timedelta(days=30)).isoformat()
     until = today.isoformat()
+    if args.year is not None:
+        years = [args.year]
+    elif args.since_year is not None:
+        years = list(range(args.since_year, today.year + 1))
+    else:
+        years = [today.year]
 
     conn = connect(args.db)
 
@@ -155,7 +185,7 @@ def main() -> None:
     for source in sources:
         try:
             if source == "treasury-direct":
-                _ingest_treasury(conn)
+                _ingest_treasury(conn, years)
             elif source == "ptax":
                 _ingest_ptax(conn, since, until)
             elif source == "cdi":
