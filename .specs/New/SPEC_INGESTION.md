@@ -68,7 +68,11 @@ CREATE TABLE series (
 CREATE TABLE points (
   series_code   TEXT NOT NULL REFERENCES series(code),
   date          TEXT NOT NULL,      -- YYYY-MM-DD
-  value         TEXT NOT NULL,      -- decimal as STRING, never float — see §6
+  value         TEXT,               -- decimal as STRING, never float — see §6. NULLable: a
+                                     -- missing/malformed source cell becomes SQL NULL, never a
+                                     -- crash or a sentinel (§6/§7) — so this column cannot be
+                                     -- NOT NULL, even though every point observed against the live
+                                     -- sources so far (5192/5192, 2026-09-09) happens to have one.
   extra_values  TEXT,               -- optional JSON: e.g. Treasury's buy/sell alongside base
   source_updated_at TEXT NOT NULL,
   PRIMARY KEY (series_code, date)
@@ -79,6 +83,18 @@ Implemented in `src/brindex_ingest/db.py`, tested (`tests/test_db.py::test_conne
 passing). `brindex-api` reads this same file — the schema is currently synchronized **by hand**
 between the two repos; formalizing that (a shared schema-version file, a migration tool) is
 explicitly deferred until the schema has changed at least once in practice.
+
+**Correction (2026-09-09, found via cross-session review while `brindex-api` was validating its
+read path against a real ingested database):** `points.value` was originally declared `TEXT NOT
+NULL` here and in `db.py` — a direct contradiction of §6/§7's requirement that a missing/malformed
+value become `NULL`. `upsert_points` with a `None` value raised `sqlite3.IntegrityError` before
+this was caught; the existing money-boundary tests only exercised the parsing functions in
+isolation and never round-tripped a `None` value through `db.upsert_points`, so the bug shipped
+silently (it also never triggered against real Tesouro/PTAX/CDI data, since no live row observed
+so far actually had a malformed cell). Fixed to `value TEXT` (nullable) in both this schema and
+`db.py`. Any database created before this fix must be recreated (`CREATE TABLE IF NOT EXISTS`
+does not retroactively relax an existing table's `NOT NULL`) — there is no migration tool yet, per
+§0/`CLAUDE.md`.
 
 ### 3.1 Identity scheme
 
@@ -136,6 +152,16 @@ This process needs to run daily. Candidates, not decided:
 Whichever is chosen, the job is a single CLI invocation (`brindex-ingest --source all`) — the
 scheduling mechanism is infrastructure, not application code, and doesn't change anything in this
 repo.
+
+### 5.1 Database path convention (aligned with `brindex-api`, 2026-09-09)
+
+`--db` defaults to the `BRINDEX_DB_PATH` environment variable if set, else `./brindex.sqlite` —
+`brindex-api`'s `Application.kt` reads the same `BRINDEX_DB_PATH` variable (defaulting to
+`brindex.sqlite` there too), so setting it once points both processes at the same file. Confirmed
+via cross-session coordination with the `brindex-api` implementation: its local dev/preview
+`.claude/launch.json` points at `/tmp/brindex/brindex.sqlite` (not `/opt/brindex` — that directory
+is `root:root`, unwritable without `sudo`). Neither repo hardcodes a shared default path; only the
+env var name is a shared convention.
 
 ## 6. Money/decimal discipline
 

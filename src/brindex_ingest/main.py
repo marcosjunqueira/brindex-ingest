@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -120,8 +121,10 @@ def main() -> None:
     parser.add_argument(
         "--db",
         type=Path,
-        default=Path("brindex.sqlite"),
-        help="Path to the SQLite database file (shared with brindex-api).",
+        default=Path(os.environ.get("BRINDEX_DB_PATH", "brindex.sqlite")),
+        help="Path to the SQLite database file (shared with brindex-api). Defaults to the "
+        "BRINDEX_DB_PATH environment variable if set (the same variable brindex-api reads), "
+        "else ./brindex.sqlite.",
     )
     parser.add_argument(
         "--source",
