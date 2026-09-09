@@ -5,9 +5,9 @@ historical time-series SQLite database, read by [`brindex-api`](https://github.c
 
 ## Status
 
-Early scaffold. Schema and CLI wired up; the three source parsers (`sources/treasury.py`,
-`sources/ptax.py`, `sources/cdi.py`) are stubs (`raise NotImplementedError`). See
-[`.specs/`](.specs/) for the design.
+Schema, CLI, and all three source parsers (`sources/treasury.py`, `sources/ptax.py`,
+`sources/cdi.py`) are implemented and tested against fixtures. See [`.specs/`](.specs/)
+for the design.
 
 ## Sources
 
@@ -23,8 +23,16 @@ Early scaffold. Schema and CLI wired up; the three source parsers (`sources/trea
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest
-.venv/bin/brindex-ingest --db brindex.sqlite --source treasury-direct
+.venv/bin/brindex-ingest --db brindex.sqlite --source all
 ```
+
+`--source` accepts `treasury-direct`, `ptax`, `cdi`, or `all` (default) — each source
+fails independently, so an outage in one never blocks the others in the same run.
+
+`--since YYYY-MM-DD` sets the backfill start date for PTAX/CDI (default: 30 days before
+today); pass an earlier date (e.g. `--since 2020-01-01`) on a first run to backfill
+further back. Ignored by `treasury-direct`, which always ingests the current calendar
+year's full XLS history regardless of `--since`.
 
 ## License
 
