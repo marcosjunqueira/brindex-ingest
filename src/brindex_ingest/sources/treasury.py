@@ -34,6 +34,19 @@ TYPES = {
     "LFT": "LFT",
     "LTN": "LTN",
     "NTN-B_Principal": "NTNB-PRINCIPAL",
+    "NTN-B": "NTNB",
+    "NTN-F": "NTNF",
+}
+
+# Popular product names as printed on an actual Tesouro Direto trade note (source's own
+# literal Portuguese product names, kept verbatim per CLAUDE.md's literal-value convention).
+# Keyed by series ticker (TYPES' values), not the CDN url_token.
+SERIES_POPULAR_NAME = {
+    "LFT": "Tesouro Selic",
+    "LTN": "Tesouro Prefixado",
+    "NTNB-PRINCIPAL": "Tesouro IPCA+",
+    "NTNB": "Tesouro IPCA+ com Juros Semestrais",
+    "NTNF": "Tesouro Prefixado com Juros Semestrais",
 }
 
 CDN_URL_TEMPLATE = (
@@ -52,7 +65,7 @@ _PRICE_DECIMALS = 2
 
 @dataclass(frozen=True)
 class TreasuryPoint:
-    series: str  # 'LFT' | 'LTN' | 'NTNB-PRINCIPAL'
+    series: str  # 'LFT' | 'LTN' | 'NTNB-PRINCIPAL' | 'NTNB' | 'NTNF'
     maturity: str  # ISO date, YYYY-MM-DD
     date: str  # ISO date, YYYY-MM-DD
     side: Side
@@ -65,6 +78,11 @@ def canonical_code(series: str, maturity: str, side: Side) -> str:
     """`TD:<SERIES>:<YYYY-MM-DD>:<SIDE>` — one series per maturity per side (BUY/SELL),
     since Tesouro Direto publishes genuinely distinct invest and redeem prices."""
     return f"TD:{series}:{maturity}:{side}"
+
+
+def display_name(series: str, maturity: str, side: Side) -> str:
+    """Human-readable series name, e.g. "Tesouro Selic 2031-03-01 (LFT, BUY)"."""
+    return f"{SERIES_POPULAR_NAME[series]} {maturity} ({series}, {side})"
 
 
 def _parse_date(cell_value: str) -> str:
@@ -137,9 +155,9 @@ def download_and_normalize(
     year: int, session: requests.Session | None = None
 ) -> list[TreasuryPoint]:
     """Download every Tesouro Direto XLS for `year` and normalize all sheets into points.
-    A single `Session` is reused across all 3 downloads (same CDN host) to avoid a fresh
-    TCP+TLS handshake per file. Each of the 3 XLS types is independent: a download/parse
-    failure on one type is logged and skipped rather than discarding the other two.
+    A single `Session` is reused across all downloads (same CDN host) to avoid a fresh
+    TCP+TLS handshake per file. Each XLS type is independent: a download/parse failure on
+    one type is logged and skipped rather than discarding the rest.
     """
     http = session or requests.Session()
     points: list[TreasuryPoint] = []

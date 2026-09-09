@@ -60,7 +60,7 @@ with no row that a concurrent `brindex-api` reader could observe).
 
 Identity scheme, `<DOMAIN>:<IDENTIFIER>`:
 - Tesouro Direto: `TD:<SERIES>:<YYYY-MM-DD>`, e.g. `TD:LFT:2026-03-01` — `<SERIES>` ∈
-  `{LFT, LTN, NTNB-PRINCIPAL}`. This scheme is deliberately kept consistent with a related spec in
+  `{LFT, LTN, NTNB-PRINCIPAL, NTNB, NTNF}`. This scheme is deliberately kept consistent with a related spec in
   the `portfolio-rebalancer` repo (`SPEC_TESOURO_DIRETO_CATALOGO_OFICIAL.md`); the two projects are
   fully decoupled otherwise.
 - PTAX: `PTAX:USD:BUY` / `PTAX:USD:SELL`.
