@@ -31,8 +31,13 @@ fails independently, so an outage in one never blocks the others in the same run
 
 `--since YYYY-MM-DD` sets the backfill start date for PTAX/CDI (default: 30 days before
 today); pass an earlier date (e.g. `--since 2020-01-01`) on a first run to backfill
-further back. Ignored by `treasury-direct`, which always ingests the current calendar
-year's full XLS history regardless of `--since`.
+further back. Ignored by `treasury-direct`, which uses `--year`/`--since-year` instead.
+
+`--year YYYY` ingests `treasury-direct` for a single calendar year (each Tesouro Direto
+XLS is published per-year by the CDN); defaults to the current year. `--since-year YYYY`
+ingests every year from `YYYY` through the current one, inclusive — use it to backfill
+years before the current one, e.g. `--since-year 2020`. The two are mutually exclusive
+and both are ignored by `ptax`/`cdi`.
 
 ## License
 
