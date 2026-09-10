@@ -23,7 +23,7 @@ browser on every use (`cornerstone-app/src/storage/bcb.ts`) with no persisted hi
 
 | Domain | Endpoint | Format | Notes |
 |---|---|---|---|
-| Tesouro Direto | `https://cdn.tesouro.gov.br/sistemas-internos/apex/producao/sistemas/sistd/{year}/{type}_{year}.xls` | legacy BIFF `.xls` (confirmed 2026-09-09 via `file`, NOT `.xlsx`) | One file per `type` (`LFT`, `LTN`, `NTN-B_Principal`, `NTN-B`, `NTN-F` — the source's own literal file-name tokens), one sheet per maturity, full-year daily history per sheet |
+| Tesouro Direto | `https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/precotaxatesourodireto.csv` | CSV, `;`-delimited, `latin-1`, decimal comma (confirmed 2026-09-09) | **Source changed 2026-09-09 — see §2.1a.** One file, all title types, full history since January 2002 (~176k rows) |
 | PTAX | BCB Olinda OData, `CotacaoDolarPeriodo` | JSON | Same endpoint already used client-side by `cornerstone-app/src/storage/bcb.ts:100-104` |
 | CDI | BCB SGS, `bcdata.sgs.4391` | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139`. Confirmed live 2026-09-09: series 4391 is **monthly**, one entry per calendar month dated the 1st (`{"data": "01/09/2026", "valor": "0.26"}`) — not daily, despite "CDI" evoking a daily rate. |
 
@@ -31,28 +31,73 @@ Each source is ingested and can fail **independently** — a Tesouro Direto CDN 
 prevent PTAX/CDI from updating, and vice versa. `main.py --source` already models this (one source at
 a time, or `all`).
 
-### 2.1 Tesouro Direto XLS structure (verified, not assumed)
+### 2.1 Tesouro Direto CSV structure (verified, not assumed)
 
-Confirmed by downloading and opening all five current files with `xlrd`:
+**Source changed 2026-09-09.** The CDN `.xls` files (`cdn.tesouro.gov.br/.../sistd/{year}/{type}_{year}.xls`,
+documented in §2.1's original text — kept below in §2.1a for provenance) turned out to be **stale in
+production**: discovered 2026-09-09 while investigating a user report that several titles (including
+long-dated ones like Tesouro IPCA+ 2035/2040/2050, nowhere near maturity) showed no quotes past
+2026-08-21. Re-downloading `NTN-B_2026.xls` live confirmed **all ten sheets** in that file — every
+maturity from 2026 through 2060 — stop at the same date, 2026-08-21, ~3 weeks before the check date.
+This is a whole-file staleness on the CDN, not a per-title maturity artifact.
+
+Two alternatives were evaluated:
+- `tesourodireto.com.br`'s own "Rendimento dos Títulos" page turned out to be backed by a live JSON
+  API (`/o/c/rentabilidades/`, a Liferay Headless Delivery custom object) returning same-day data —
+  but that host sits behind a Cloudflare managed challenge; a plain HTTP client gets a "Just a
+  moment..." challenge page instead of JSON. Only a real browser session that already solved the JS
+  challenge could read it. **Rejected**: would require a headless-browser dependency (e.g.
+  Playwright) just to pass an anti-bot check, adding heavy infra and fragility (breaks silently if
+  Cloudflare's challenge changes) for an undocumented, unofficial endpoint.
+- **Chosen:** the Tesouro Nacional open-data portal, `tesourotransparente.gov.br` (CKAN-based,
+  the same software as `dados.gov.br`) — a completely different system from `tesourodireto.com.br`
+  aimed at programmatic/public consumption, with no anti-bot protection. Its dataset
+  `taxas-dos-titulos-ofertados-pelo-tesouro-direto` ("Taxas dos Títulos Ofertados pelo Tesouro
+  Direto") publishes exactly the same underlying numbers — verified by cross-checking overlapping
+  rows against the stale `.xls` (`NTN-B 150832`/`Tesouro IPCA+ com Juros Semestrais` vencimento
+  `15/08/2032`, dates 19–21/08/2026: PU values matched to the cent) — but the resource's
+  `last_modified` was `2026-09-09T10:21:10`, and its most recent row for that same title was dated
+  `08/09/2026` (the prior business day), i.e. genuinely current, not stuck. Dataset metadata:
+  `https://www.tesourotransparente.gov.br/ckan/api/3/action/package_show?id=taxas-dos-titulos-ofertados-pelo-tesouro-direto`.
+  License: ODbL (Open Data Commons) — official open data, no auth required.
+
+Confirmed by downloading and parsing the live CSV on 2026-09-09:
+- One file, one header row, columns (source's literal Portuguese headers, `;`-delimited,
+  `latin-1`-encoded, decimal comma): `Tipo Titulo` (title type), `Data Vencimento` (maturity date,
+  `DD/MM/YYYY`), `Data Base` (as-of date, `DD/MM/YYYY`), `Taxa Compra Manha` (morning buy rate),
+  `Taxa Venda Manha` (morning sell rate), `PU Compra Manha` (morning buy unit price), `PU Venda
+  Manha` (morning sell unit price), `PU Base Manha` (morning base unit price) — the same fields the
+  old `.xls` had, just reshaped into one flat table instead of one workbook per type/one sheet per
+  maturity.
+- `Tipo Titulo` is a **retail product name**, not the `<SERIES>` token used in this repo's identity
+  scheme — critically, `Tesouro IPCA+` (no coupon; PU carries no accrued coupon value) and `Tesouro
+  IPCA+ com Juros Semestrais` (semiannual coupon; materially higher PU for the same maturity, since
+  it embeds future coupon payments) are **different instruments that can share the same `Data
+  Vencimento`** — conflating them silently would corrupt the series. See §3.1a for the full mapping
+  from `Tipo Titulo` strings to `<SERIES>` tokens.
+- One row per `(Tipo Titulo, Data Vencimento, Data Base)` — no separate "sheet" concept; a maturity's
+  full history is just every row matching its `Data Vencimento`, going back to whenever that title
+  started trading (as early as January 2002 for some series).
+- Same two-sided pricing as before: `PU Compra Manha` (invest) vs. `PU Venda Manha` (redeem) remain
+  genuinely distinct and are still ingested as two points per row — §3.1's `:BUY`/`:SELL` scheme is
+  unaffected by the source change.
+
+### 2.1a Tesouro Direto XLS structure (superseded 2026-09-09, kept for provenance)
+
+Confirmed by downloading and opening all five current files with `xlrd`, before the switch to the
+CSV source above:
 - Sheet names encode series + maturity: `"LFT 010326"` = LFT maturing 2026-03-01.
 - Cell `(0, 1)` of every sheet holds the maturity date explicitly (`"Vencimento"` / `"01/03/2026"` —
-  "maturity date", the source's literal Portuguese header) — **use this cell as the source of truth
-  for the date**, not a parse of the sheet name; they agree today but the cell is the more direct
-  signal.
+  "maturity date", the source's literal Portuguese header).
 - Row 1 is the header (source's literal Portuguese column names): `Dia` (day), `Taxa Compra Manhã`
   (morning buy rate), `Taxa Venda Manhã` (morning sell rate), `PU Compra Manhã` (morning buy unit
   price), `PU Venda Manhã` (morning sell unit price), `PU Base Manhã` (morning base unit price). Data
   starts at row 2.
-- Each sheet holds the **full calendar-year daily history** for that maturity, not just the current
-  day — including maturities that already expired within the year (e.g. `LFT_2026.xls` still
-  contains `LFT 010326`, which matured 2026-03-01, with data through its last trading day). This is
-  what makes a daily ingestion meaningful from day one: even a single run recovers a whole year of
-  backfill, not just "today".
-- Tesouro Direto publishes genuinely distinct prices to invest (`PU Compra Manhã`) and to redeem
-  (`PU Venda Manhã`) — they are not interchangeable, and picking only one into a single `value` per
-  maturity/date would silently discard the other. Each row is therefore ingested as **two** points,
-  one per side — see §3.1's `:BUY`/`:SELL` identity scheme (decided during implementation planning,
-  2026-09-09).
+- Each sheet held the full calendar-year daily history for that maturity, not just the current day.
+- This CDN endpoint is not being removed from the world and may still be worth a fallback source if
+  the CSV portal ever goes down, but it is no longer the primary source implemented against — its
+  update cadence has been observed unreliable (see §2.1) and it requires a binary XLS parser
+  (`xlrd`) instead of a plain CSV reader.
 
 ## 3. Data model
 
@@ -122,6 +167,29 @@ does not retroactively relax an existing table's `NOT NULL`) — there is no mig
 are module-level in their own files (no function needed — they're each a fixed pair/singleton, not a
 family parameterized by maturity).
 
+### 3.1a `Tipo Titulo` → `<SERIES>` mapping (added 2026-09-09, with the CSV source switch)
+
+The CSV's `Tipo Titulo` values must be mapped to this repo's `<SERIES>` tokens at the parser boundary
+(`sources/treasury.py`) before a row reaches `db.py` — the CSV string is source vocabulary, not
+project vocabulary, same rule as elsewhere in this repo (see `CLAUDE.md`/Naming):
+
+| `Tipo Titulo` (source, Portuguese) | `<SERIES>` token |
+|---|---|
+| `Tesouro Selic` | `LFT` |
+| `Tesouro Prefixado` | `LTN` |
+| `Tesouro Prefixado com Juros Semestrais` | `NTNF` |
+| `Tesouro IPCA+` | `NTNB-PRINCIPAL` |
+| `Tesouro IPCA+ com Juros Semestrais` | `NTNB` |
+
+**Open question, not resolved here:** the live CSV also contains three `Tipo Titulo` values with no
+corresponding `<SERIES>` token in the current enum (`{LFT, LTN, NTNB-PRINCIPAL, NTNB, NTNF}`) —
+`Tesouro Educa+`, `Tesouro Renda+ Aposentadoria Extra`, and `Tesouro IGPM+ com Juros Semestrais`.
+These are newer retail products (Educa+/RendA+ didn't exist when the original `<SERIES>` enum was
+designed) that were invisible in the old `.xls` feed's five files but are present in this CSV. Until
+this is decided, `sources/treasury.py` must skip unmapped `Tipo Titulo` values explicitly (log and
+continue, per §2's independent-failure principle) rather than crash or silently mis-map them — adding
+`<SERIES>` tokens for them is future scope.
+
 **Breaking change vs. earlier drafts of this spec:** table/column names, the `--fonte` CLI flag, and
 the `series.domain` value `tesouro-direto` were originally Portuguese (`pontos`, `codigo`, `dominio`,
 `nome`, `metadados`, `criado_em`, `serie_codigo`, `data`, `valor`, `valores_extra`,
@@ -174,9 +242,13 @@ enforced at the parser boundary (`sources/*.py`), before a row ever reaches `db.
 
 - `tests/test_db.py` — schema creation, implemented and passing.
 - Each source parser needs unit tests against **fixture files**, never live network calls in CI:
-  - Tesouro Direto: the `.xls` files downloaded during this spec's design session and during later
-    series additions are the fixtures (committed to `tests/fixtures/`), keeping file size in mind:
-    ~100–225 KB each, acceptable to commit.
+  - Tesouro Direto: as of the 2026-09-09 source switch (§2.1), the fixture should be a **trimmed
+    slice** of `precotaxatesourodireto.csv` (the live file is ~14 MB/176k rows — commit only the rows
+    needed to exercise each `<SERIES>` mapping, a maturity boundary, and at least one malformed/empty
+    price cell for the money-boundary test below), not the full download. The five `.xls` files
+    committed under `tests/fixtures/` for the superseded CDN source (§2.1a) can be removed once the
+    CSV parser and its own fixture are in place and passing — not before, to avoid a gap in test
+    coverage mid-migration.
   - PTAX/CDI: a captured JSON response per endpoint, small and easy to fixture.
 - Idempotency test: running ingestion for the same source and date range twice must leave `points`
   with exactly the same row count as running it once (no duplicates), and update `value` if the

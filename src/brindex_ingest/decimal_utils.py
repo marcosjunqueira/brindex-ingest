@@ -16,10 +16,10 @@ from decimal import ROUND_HALF_UP, Decimal
 def scale_and_format(value: float | int | str | None, decimals: int) -> str | None:
     """Convert `value` to a fixed-`decimals` decimal string, or `None` if it's blank/non-numeric.
 
-    `value` is expected to be a `float` fresh out of `xlrd` (this project's only float source —
-    see `sources/treasury.py`). Blank XLS cells surface as `''`; `None` and non-finite floats
-    (`nan`/`inf`, which `xlrd` never actually produces but which would otherwise corrupt the
-    scaled integer) are treated the same way.
+    `value` is typically a `float`/`Decimal` already normalized by a source parser (e.g.
+    `sources/treasury.py`, which converts the Tesouro Transparente CSV's decimal-comma
+    strings before calling this). Blank cells surface as `''`; `None` and non-finite
+    floats (`nan`/`inf`) are treated the same way.
 
     Rounds via `Decimal(repr(numeric))` — `repr()` gives the shortest decimal string that
     round-trips to the same float — rather than `numeric * 10**decimals`, which adds its own

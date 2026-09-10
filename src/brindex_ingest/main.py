@@ -23,42 +23,43 @@ def _now_iso() -> str:
 
 
 def _ingest_treasury(conn, years: list[int]) -> None:
+    """Filters the downloaded points down to those dated (`Data Base`) in one of
+    `years` — the CSV source (SPEC_INGESTION.md §2.1) is a single file covering full
+    history since 2002, so unlike the superseded per-year CDN `.xls` files, filtering
+    happens in memory after one download, not as separate per-year requests.
+    """
     now = _now_iso()
-    for year in years:
-        try:
-            points = treasury.download_and_normalize(year)
-        except Exception:
-            logger.exception(
-                "treasury: skipping year %d — download/parse failed for the whole year", year
-            )
+    points = treasury.download_and_normalize()
+    wanted_years = set(years)
+    points = [p for p in points if int(p.date[:4]) in wanted_years]
+
+    seen_codes: set[str] = set()
+    for point in points:
+        code = treasury.canonical_code(point.series, point.maturity, point.side)
+        if code in seen_codes:
             continue
-        seen_codes: set[str] = set()
-        for point in points:
-            code = treasury.canonical_code(point.series, point.maturity, point.side)
-            if code in seen_codes:
-                continue
-            seen_codes.add(code)
-            upsert_series(
-                conn,
-                code=code,
-                domain="treasury-direct",
-                name=treasury.display_name(point.series, point.maturity, point.side),
-                metadata={"maturity": point.maturity, "series": point.series, "side": point.side},
-                created_at=now,
-            )
-        upsert_points(
+        seen_codes.add(code)
+        upsert_series(
             conn,
-            (
-                PointRow(
-                    series_code=treasury.canonical_code(point.series, point.maturity, point.side),
-                    date=point.date,
-                    value=point.price,
-                    extra_values=json.dumps({"rate": point.rate, "base_price": point.base_price}),
-                    source_updated_at=now,
-                )
-                for point in points
-            ),
+            code=code,
+            domain="treasury-direct",
+            name=treasury.display_name(point.series, point.maturity, point.side),
+            metadata={"maturity": point.maturity, "series": point.series, "side": point.side},
+            created_at=now,
         )
+    upsert_points(
+        conn,
+        (
+            PointRow(
+                series_code=treasury.canonical_code(point.series, point.maturity, point.side),
+                date=point.date,
+                value=point.price,
+                extra_values=json.dumps({"rate": point.rate, "base_price": point.base_price}),
+                source_updated_at=now,
+            )
+            for point in points
+        ),
+    )
 
 
 def _ingest_ptax(conn, since: str, until: str) -> None:
@@ -152,18 +153,20 @@ def main() -> None:
         "--year",
         type=int,
         default=None,
-        help="Ingest treasury-direct for this single calendar year only (each Tesouro Direto "
-        "XLS is published per-year by the CDN). Defaults to the current year. Mutually "
-        "exclusive with --since-year. Ignored by ptax/cdi.",
+        help="Ingest treasury-direct rows dated (Data Base) in this single calendar year "
+        "only. The source is now one CSV covering full history since 2002 (a single "
+        "download regardless of this flag) — this only filters which rows get written. "
+        "Defaults to the current year. Mutually exclusive with --since-year. Ignored by "
+        "ptax/cdi.",
     )
     year_group.add_argument(
         "--since-year",
         type=int,
         default=None,
-        help="Ingest treasury-direct for every calendar year from this one through the "
-        "current year, inclusive (one CDN request per year) — use to backfill years before "
-        "the current one, e.g. --since-year 2020. Mutually exclusive with --year. Ignored "
-        "by ptax/cdi.",
+        help="Ingest treasury-direct rows dated (Data Base) from this calendar year "
+        "through the current year, inclusive — use to backfill years before the current "
+        "one, e.g. --since-year 2020 (or an early year like 2002 for the full history). "
+        "Mutually exclusive with --year. Ignored by ptax/cdi.",
     )
     args = parser.parse_args()
 
