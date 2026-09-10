@@ -1,41 +1,40 @@
 from pathlib import Path
 
-import xlrd
-
 from brindex_ingest.db import PointRow, connect, upsert_points, upsert_series
 from brindex_ingest.sources import treasury
 
 FIXTURES = Path(__file__).parent / "fixtures"
+SAMPLE_CSV = (FIXTURES / "precotaxatesourodireto_sample.csv").read_text(encoding="latin-1")
 
 
-def _parse_fixture(filename: str, sheet_name: str, series: str):
-    workbook = xlrd.open_workbook(str(FIXTURES / filename))
-    sheet = workbook.sheet_by_name(sheet_name)
-    return treasury._parse_sheet(sheet, series)
+def test_sample_csv_yields_buy_and_sell_per_mapped_row() -> None:
+    points = treasury._parse_csv(SAMPLE_CSV)
+    # 8 data rows, 1 unmapped (Tesouro Educa+) skipped -> 7 mapped rows * 2 sides
+    assert len(points) == 14
 
 
-def test_lft_fixture_yields_buy_and_sell_per_row() -> None:
-    points = _parse_fixture("LFT_2026.xls", "LFT 010326", "LFT")
-    workbook = xlrd.open_workbook(str(FIXTURES / "LFT_2026.xls"))
-    sheet = workbook.sheet_by_name("LFT 010326")
-    data_rows = sheet.nrows - 2
-    assert len(points) == data_rows * 2
-
-
-def test_lft_fixture_first_row_values() -> None:
-    points = _parse_fixture("LFT_2026.xls", "LFT 010326", "LFT")
+def test_first_row_values() -> None:
+    points = treasury._parse_csv(SAMPLE_CSV)
     buy, sell = points[0], points[1]
 
-    assert buy.maturity == "2026-03-01"
-    assert buy.date == "2026-01-02"
+    assert buy.series == "LFT"
+    assert buy.maturity == "2028-03-01"
+    assert buy.date == "2026-08-31"
     assert buy.side == "BUY"
-    assert buy.price == "18105.30"
-    assert buy.base_price == "18094.98"
+    assert buy.price == "19780.33"
+    assert buy.rate == "0.000100"  # source "0,01" is a percentage-point figure -> /100
+    assert buy.base_price == "19767.10"
 
-    assert sell.date == "2026-01-02"
     assert sell.side == "SELL"
-    assert sell.price == "18094.98"
-    assert sell.base_price == "18094.98"
+    assert sell.price == "19767.10"
+    assert sell.rate == "0.000200"  # source "0,02" -> /100
+
+
+def test_unmapped_tipo_titulo_is_skipped() -> None:
+    points = treasury._parse_csv(SAMPLE_CSV)
+    assert all(p.series != "Tesouro Educa+" for p in points)
+    codes = {treasury.canonical_code(p.series, p.maturity, p.side) for p in points}
+    assert not any("Educa" in c for c in codes)
 
 
 def test_canonical_code_distinguishes_sides() -> None:
@@ -46,28 +45,8 @@ def test_canonical_code_distinguishes_sides() -> None:
     assert sell_code == "TD:LFT:2026-03-01:SELL"
 
 
-def test_ltn_and_ntnb_fixtures_parse_without_error() -> None:
-    ltn_points = _parse_fixture("LTN_2026.xls", "LTN 010127", "LTN")
-    ntnb_points = _parse_fixture(
-        "NTN-B_Principal_2026.xls", "NTN-B Princ 150826", "NTNB-PRINCIPAL"
-    )
-    assert len(ltn_points) > 0
-    assert len(ntnb_points) > 0
-
-
-def test_ntnb_and_ntnf_fixtures_parse_without_error() -> None:
-    ntnb_points = _parse_fixture("NTN-B_2026.xls", "NTN-B 150826", "NTNB")
-    ntnf_points = _parse_fixture("NTN-F_2026.xls", "NTN-F 010127", "NTNF")
-    assert len(ntnb_points) > 0
-    assert len(ntnf_points) > 0
-    assert ntnb_points[0].series == "NTNB"
-    assert ntnb_points[0].maturity == "2026-08-15"
-    assert ntnf_points[0].series == "NTNF"
-    assert ntnf_points[0].maturity == "2027-01-01"
-
-
 def test_every_series_has_a_popular_name() -> None:
-    assert set(treasury.SERIES_POPULAR_NAME) == set(treasury.TYPES.values())
+    assert set(treasury.SERIES_POPULAR_NAME) == set(treasury.TIPO_TITULO_TO_SERIES.values())
 
 
 def test_display_name_format() -> None:
@@ -77,19 +56,38 @@ def test_display_name_format() -> None:
     )
 
 
-def test_money_boundary_blank_cell_becomes_none() -> None:
-    row = ["02/01/2026", "", 0.000264, 18105.3, "", 18094.98]
-    buy, sell = treasury._parse_row(row, "LFT", "2026-03-01")
+def test_all_five_mapped_series_are_present_in_sample() -> None:
+    points = treasury._parse_csv(SAMPLE_CSV)
+    assert {p.series for p in points} == {"LFT", "LTN", "NTNF", "NTNB-PRINCIPAL", "NTNB"}
 
-    assert buy.rate is None
-    assert buy.price == "18105.30"
-    assert sell.price is None
-    assert sell.rate == "0.000264"
+
+def test_rate_is_converted_from_source_percentage_points_to_a_fraction() -> None:
+    # The CSV publishes "Taxa Compra/Venda Manha" as a raw percentage-point figure
+    # (e.g. "7,72" meaning 7.72%), but this repo's established convention (matching the
+    # superseded .xls source and every already-stored rate) is a fraction of 1
+    # (0.0772) — regression test for the 100x scale bug found during code review.
+    points = treasury._parse_csv(SAMPLE_CSV)
+    ntnb_principal_buy = next(
+        p for p in points if p.series == "NTNB-PRINCIPAL" and p.side == "BUY"
+    )
+    assert ntnb_principal_buy.rate == "0.077200"  # source "7,72" -> /100
+
+
+def test_money_boundary_blank_cells_become_none() -> None:
+    points = treasury._parse_csv(SAMPLE_CSV)
+    last_buy, last_sell = points[-2], points[-1]
+
+    assert last_buy.date == "2026-09-09"
+    assert last_buy.rate is None  # blank "Taxa Compra Manha"
+    assert last_buy.price == "19830.70"
+    assert last_sell.price is None  # blank "PU Venda Manha"
+    assert last_sell.rate == "0.000200"  # source "0,02" -> /100
+    assert last_buy.base_price == "19817.48"
 
 
 def test_idempotent_upsert(tmp_path: Path) -> None:
     conn = connect(tmp_path / "test.sqlite")
-    points = _parse_fixture("LFT_2026.xls", "LFT 010326", "LFT")[:2]
+    points = treasury._parse_csv(SAMPLE_CSV)[:2]
 
     def to_rows(pts):
         for p in pts:

@@ -13,7 +13,7 @@ for the design.
 
 | Domain | Source | Format |
 |---|---|---|
-| Tesouro Direto | `cdn.tesouro.gov.br/.../{type}_{year}.xls` | legacy XLS (BIFF) |
+| Tesouro Direto | `tesourotransparente.gov.br` open-data CSV | CSV |
 | PTAX | BCB Olinda OData | JSON |
 | CDI | BCB SGS series 4391 | JSON |
 
@@ -33,8 +33,9 @@ fails independently, so an outage in one never blocks the others in the same run
 today); pass an earlier date (e.g. `--since 2020-01-01`) on a first run to backfill
 further back. Ignored by `treasury-direct`, which uses `--year`/`--since-year` instead.
 
-`--year YYYY` ingests `treasury-direct` for a single calendar year (each Tesouro Direto
-XLS is published per-year by the CDN); defaults to the current year. `--since-year YYYY`
+`--year YYYY` ingests `treasury-direct` rows dated in a single calendar year only (the
+source is one CSV covering full history since 2002 — this filters which rows get
+written, not which are downloaded); defaults to the current year. `--since-year YYYY`
 ingests every year from `YYYY` through the current one, inclusive — use it to backfill
 years before the current one, e.g. `--since-year 2020`. The two are mutually exclusive
 and both are ignored by `ptax`/`cdi`.
