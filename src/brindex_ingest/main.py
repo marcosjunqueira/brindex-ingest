@@ -12,10 +12,16 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import requests
+
 from brindex_ingest.db import PointRow, connect, upsert_points, upsert_series
 from brindex_ingest.sources import b3, cdi, ptax, treasury
 
 logger = logging.getLogger(__name__)
+
+# Every source is Brazilian and publishes on Brasília time (UTC-3, no DST since 2019),
+# so "today" and the default year follow it rather than UTC, which turns over at 21:00.
+_BRASILIA = timezone(timedelta(hours=-3))
 
 
 def _now_iso() -> str:
@@ -122,12 +128,20 @@ def _ingest_cdi(conn, since: str, until: str) -> None:
     )
 
 
-def _ingest_b3(conn, years: list[int]) -> None:
+def _ingest_b3(conn, years: list[int], current_year: int) -> None:
     """One annual COTAHIST download per year in `years`; the current year's file is
     republished by B3 every trading day, so a daily run with the default `--year` picks
-    up the latest close."""
+    up the latest close. B3 publishes a year's file only after its first trading day, so
+    a 404 for `current_year` means "no data yet", not a failure. Each year is committed
+    on its own, so a failing year never discards the years already ingested."""
     for year in years:
-        points = b3.download_and_normalize(year)
+        try:
+            points = b3.download_and_normalize(year)
+        except requests.HTTPError as e:
+            if year == current_year and e.response is not None and e.response.status_code == 404:
+                logger.info("b3: COTAHIST file for %d not published yet; skipping", year)
+                continue
+            raise
         now = _now_iso()
         latest_by_ticker = {point.ticker: point for point in sorted(points, key=lambda p: p.date)}
         for point in latest_by_ticker.values():
@@ -160,6 +174,7 @@ def _ingest_b3(conn, years: list[int]) -> None:
                 for point in points
             ),
         )
+        conn.commit()
 
 
 def main() -> None:
@@ -211,7 +226,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(_BRASILIA).date()
     since = args.since if args.since is not None else (today - timedelta(days=30)).isoformat()
     until = today.isoformat()
     if args.year is not None:
@@ -220,6 +235,11 @@ def main() -> None:
         years = list(range(args.since_year, today.year + 1))
     else:
         years = [today.year]
+    # In early January also re-fetch last year's b3 file, so a December close B3
+    # republished after the last run of that year is still picked up.
+    b3_years = years
+    if args.year is None and args.since_year is None and today.month == 1 and today.day <= 7:
+        b3_years = [today.year - 1, today.year]
 
     conn = connect(args.db)
 
@@ -235,7 +255,7 @@ def main() -> None:
             elif source == "cdi":
                 _ingest_cdi(conn, since, until)
             elif source == "b3":
-                _ingest_b3(conn, years)
+                _ingest_b3(conn, b3_years, today.year)
             conn.commit()
         except Exception:
             conn.rollback()

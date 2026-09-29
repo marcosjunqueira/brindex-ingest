@@ -52,8 +52,8 @@ def canonical_code(ticker: str) -> str:
 
 
 def _price(field: str, quote_factor: int) -> str | None:
-    """`field` is an integer with 2 implied decimals; divide by FATCOT (1 or 1000) so the
-    stored value is always the price of one unit. A non-numeric field becomes `None`."""
+    """`field` is an integer with 2 implied decimals; divide by FATCOT (a power of ten,
+    seen from 1 up to 1000000) so the stored value is always the price of one unit. A non-numeric field becomes `None`."""
     try:
         cents = int(field)
     except ValueError:

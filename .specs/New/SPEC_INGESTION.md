@@ -25,7 +25,7 @@ browser on every use (`cornerstone-app/src/storage/bcb.ts`) with no persisted hi
 |---|---|---|---|
 | Tesouro Direto | `https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/precotaxatesourodireto.csv` | CSV, `;`-delimited, `latin-1`, decimal comma (confirmed 2026-09-09) | **Source changed 2026-09-09 — see §2.1a.** One file, all title types, full history since January 2002 (~176k rows) |
 | PTAX | BCB Olinda OData, `CotacaoDolarPeriodo` | JSON | Same endpoint already used client-side by `cornerstone-app/src/storage/bcb.ts:100-104` |
-| B3 (stocks, FIIs, ETFs, BDRs) | `https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A<YYYY>.ZIP` | ZIP holding one fixed-width `latin-1` TXT, 245 chars per record | Added 2026-09-29, see §2.2. **Not yet verified live** (host unreachable from the environment the parser was written in) |
+| B3 (stocks, FIIs, ETFs, BDRs) | `https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A<YYYY>.ZIP` | ZIP holding one fixed-width `latin-1` TXT, 245 chars per record | Added 2026-09-29, see §2.2. Verified live 2026-09-28: 200 for 2025 (~89 MB) and 2026 (~80 MB), 404 for a year not yet published |
 | CDI | BCB SGS, `bcdata.sgs.4391` | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139`. Confirmed live 2026-09-09: series 4391 is **monthly**, one entry per calendar month dated the 1st (`{"data": "01/09/2026", "valor": "0.26"}`) — not daily, despite "CDI" evoking a daily rate. |
 
 Each source is ingested and can fail **independently** — a Tesouro Direto CDN outage must not
@@ -100,7 +100,7 @@ CSV source above:
   update cadence has been observed unreliable (see §2.1) and it requires a binary XLS parser
   (`xlrd`) instead of a plain CSV reader.
 
-### 2.2 B3 COTAHIST structure (added 2026-09-29, from B3's published layout, not yet verified live)
+### 2.2 B3 COTAHIST structure (added 2026-09-29, verified live 2026-09-28)
 
 Layout: B3's `SeriesHistoricas_Layout.pdf`. Positions below are 1-based, as in that document.
 
@@ -116,12 +116,19 @@ Layout: B3's `SeriesHistoricas_Layout.pdf`. Positions below are 1-based, as in t
 | `PREULT` (last price) | 109–121 | point `value` (the close) |
 | `TOTNEG` | 148–152 | `extra_values.trades` |
 | `VOLTOT` | 171–188 | `extra_values.volume` (BRL) |
-| `FATCOT` (quote factor) | 211–217 | prices are divided by it (1 or 1000) so `value` is always a unit price |
+| `FATCOT` (quote factor) | 211–217 | prices are divided by it so `value` is always a unit price. A power of ten: the real 2026 file has 1, 100, 1000, 10000 and 1000000 in the spot market (e.g. `AZUL53` at 1000000) |
 | `CODISI` | 231–242 | `metadata.isin` |
 
 Prices are integers with two implied decimals, converted with `Decimal` only. They are raw, not
 adjusted for dividends or splits. The current year's annual file is republished every trading day,
-so the daily run just re-downloads it (`--year` defaults to the current year).
+so the daily run just re-downloads it (`--year` defaults to the current year, on Brasília time).
+A year's file only exists after its first trading day (404 before that), so a 404 for the current
+year is logged and skipped, and during the first 7 days of January the default run also re-fetches
+the previous year to catch its last close. Each year is committed separately.
+
+Verified 2026-09-28 against the real `COTAHIST_A2026.ZIP` (one member, latin-1, 2,967,782 lines,
+all 245 chars): 262,809 spot points, no null close, no duplicate (ticker, date), no malformed
+record, values as expected (PETR4 43.55, HGLG11 145.83, BOVA11 183.95, AAPL34 81.96).
 
 **Licensing (open, must be settled before selling B3 data):** the file is free to download, but
 B3's *Política Comercial de Market Data* covers external redistribution of end-of-day data, which
