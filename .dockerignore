@@ -1,0 +1,19 @@
+# Only pyproject.toml, README.md, LICENSE and src/ are needed to build the image.
+.git
+.github
+.claude
+.specs
+.venv
+venv
+tests
+build
+dist
+*.egg-info
+__pycache__
+.pytest_cache
+.env
+.env.*
+*.sqlite
+*.sqlite-*
+*.xls
+*.xlsx
