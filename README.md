@@ -44,12 +44,13 @@ and both are ignored by `ptax`/`cdi`.
 
 ## Docker image and releases
 
-Each `vX.Y.Z` tag on `main` publishes `ghcr.io/marcosjunqueira/brindex-ingest:X.Y.Z` (plus the floating
-`X.Y`, `X` and `latest` tags when it is the highest release in that range; no bare `X` while the
-major version is 0) and a
-GitHub Release. The tag must match `version` in `pyproject.toml`. The image is a one-shot job: it runs one ingestion into
-`/data/brindex.sqlite` and exits with the same code as the CLI; arguments are passed through. In
-production it runs as the `ingest` service of brindex-api's
+Each `vX.Y.Z` tag on `main` publishes `ghcr.io/marcosjunqueira/brindex-ingest:X.Y.Z` (plus the
+floating `X.Y`, `X` and `latest` tags when it is the highest release in that range; no bare `X`
+while the major version is 0) and a GitHub Release. The tag must match `version` in
+`pyproject.toml`; `scripts/release.sh patch` (or `minor`, `major`, `X.Y.Z`, with `--dry-run` to
+preview) bumps it, commits, tags and pushes after you confirm. The image is a one-shot job: it runs
+one ingestion into `/data/brindex.sqlite` and exits with the same code as the CLI; arguments are
+passed through. In production it runs as the `ingest` service of brindex-api's
 [`deploy/docker-compose.yml`](https://github.com/marcosjunqueira/brindex-api/blob/main/deploy/docker-compose.yml),
 scheduled by host cron under `flock`, so runs never overlap
 (`flock ingest.lock docker compose run --rm ingest`); see brindex-api's
