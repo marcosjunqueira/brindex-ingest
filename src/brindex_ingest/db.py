@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS points (
 
 def connect(db_path: Path) -> sqlite3.Connection:
     """Open (and, on first run, create) the BRIndex SQLite database at `db_path`."""
-    conn = sqlite3.connect(db_path)
+    # Wait up to 30 s (Python's default is 5) for readers such as brindex-api to release the
+    # database before a commit gives up with "database is locked".
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA_SQL)
     _check_schema(conn, db_path)
