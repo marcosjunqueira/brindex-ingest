@@ -25,6 +25,7 @@ browser on every use (`cornerstone-app/src/storage/bcb.ts`) with no persisted hi
 |---|---|---|---|
 | Tesouro Direto | `https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/precotaxatesourodireto.csv` | CSV, `;`-delimited, `latin-1`, decimal comma (confirmed 2026-09-09) | **Source changed 2026-09-09 — see §2.1a.** One file, all title types, full history since January 2002 (~176k rows) |
 | PTAX | BCB Olinda OData, `CotacaoDolarPeriodo` | JSON | Same endpoint already used client-side by `cornerstone-app/src/storage/bcb.ts:100-104` |
+| B3 (stocks, FIIs, ETFs, BDRs) | `https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A<YYYY>.ZIP` | ZIP holding one fixed-width `latin-1` TXT, 245 chars per record | Added 2026-09-29, see §2.2. Verified live 2026-09-28: 200 for 2025 (~89 MB) and 2026 (~80 MB), 404 for a year not yet published |
 | CDI | BCB SGS, `bcdata.sgs.4391` | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139`. Confirmed live 2026-09-09: series 4391 is **monthly**, one entry per calendar month dated the 1st (`{"data": "01/09/2026", "valor": "0.26"}`) — not daily, despite "CDI" evoking a daily rate. |
 
 Each source is ingested and can fail **independently** — a Tesouro Direto CDN outage must not
@@ -99,6 +100,41 @@ CSV source above:
   update cadence has been observed unreliable (see §2.1) and it requires a binary XLS parser
   (`xlrd`) instead of a plain CSV reader.
 
+### 2.2 B3 COTAHIST structure (added 2026-09-29, verified live 2026-09-28)
+
+Layout: B3's `SeriesHistoricas_Layout.pdf`. Positions below are 1-based, as in that document.
+
+| Field | Positions | Use |
+|---|---|---|
+| `TIPREG` | 1–2 | `00` header, `01` quote, `99` trailer — only `01` is kept |
+| `DATA DO PREGÃO` (trading date) | 3–10 | `AAAAMMDD` → point `date` |
+| `CODBDI` | 11–12 | stored in `metadata.bdi_code` (e.g. `02` standard lot, `12` FII) |
+| `CODNEG` (ticker) | 13–24 | → code `B3:<CODNEG>` |
+| `TPMERC` (market type) | 25–27 | only `010` (spot, "VISTA") is kept; options, forwards and odd lot (`020`) are dropped |
+| `NOMRES` + `ESPECI` | 28–49 | series `name` |
+| `PREABE`/`PREMAX`/`PREMIN` | 57–95 | `extra_values.open`/`high`/`low` |
+| `PREULT` (last price) | 109–121 | point `value` (the close) |
+| `TOTNEG` | 148–152 | `extra_values.trades` |
+| `VOLTOT` | 171–188 | `extra_values.volume` (BRL) |
+| `FATCOT` (quote factor) | 211–217 | prices are divided by it so `value` is always a unit price. A power of ten: the real 2026 file has 1, 100, 1000, 10000 and 1000000 in the spot market (e.g. `AZUL53` at 1000000) |
+| `CODISI` | 231–242 | `metadata.isin` |
+
+Prices are integers with two implied decimals, converted with `Decimal` only. They are raw, not
+adjusted for dividends or splits. The current year's annual file is republished every trading day,
+so the daily run just re-downloads it (`--year` defaults to the current year, on Brasília time).
+A year's file only exists after its first trading day (404 before that), so a 404 for the current
+year is logged and skipped, and during the first 7 days of January the default run also re-fetches
+the previous year to catch its last close. Each year is committed separately.
+
+Verified 2026-09-28 against the real `COTAHIST_A2026.ZIP` (one member, latin-1, 2,967,782 lines,
+all 245 chars): 262,809 spot points, no null close, no duplicate (ticker, date), no malformed
+record, values as expected (PETR4 43.55, HGLG11 145.83, BOVA11 183.95, AAPL34 81.96).
+
+**Licensing (open, must be settled before selling B3 data):** the file is free to download, but
+B3's *Política Comercial de Market Data* covers external redistribution of end-of-day data, which
+likely requires a contract with B3. Ingesting is not redistributing; serving it through a paid
+`brindex-api` is.
+
 ## 3. Data model
 
 ```sql
@@ -162,6 +198,8 @@ does not retroactively relax an existing table's `NOT NULL`) — there is no mig
 - PTAX: `PTAX:USD:BUY` / `PTAX:USD:SELL` (previously `COMPRA` / `VENDA` — renamed for the
   English-everywhere pass; this is a stored-data breaking change, see note below).
 - CDI: `CDI:SGS:4391` (the BCB SGS series number is already a stable, public identifier).
+- B3: `B3:<TICKER>` (e.g. `B3:PETR4`, `B3:HGLG11`, `B3:BOVA11`), `domain` `b3`. The ticker is B3's
+  own `CODNEG`, already a stable public identifier.
 
 `canonical_code()` for Tesouro Direto is implemented in `sources/treasury.py`; PTAX/CDI's constants
 are module-level in their own files (no function needed — they're each a fixed pair/singleton, not a

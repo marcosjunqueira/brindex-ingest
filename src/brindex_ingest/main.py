@@ -12,10 +12,16 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import requests
+
 from brindex_ingest.db import PointRow, connect, upsert_points, upsert_series
-from brindex_ingest.sources import cdi, ptax, treasury
+from brindex_ingest.sources import b3, cdi, ptax, treasury
 
 logger = logging.getLogger(__name__)
+
+# Every source is Brazilian and publishes on Brasília time (UTC-3, no DST since 2019),
+# so "today" and the default year follow it rather than UTC, which turns over at 21:00.
+_BRASILIA = timezone(timedelta(hours=-3))
 
 
 def _now_iso() -> str:
@@ -122,6 +128,55 @@ def _ingest_cdi(conn, since: str, until: str) -> None:
     )
 
 
+def _ingest_b3(conn, years: list[int], current_year: int) -> None:
+    """One annual COTAHIST download per year in `years`; the current year's file is
+    republished by B3 every trading day, so a daily run with the default `--year` picks
+    up the latest close. B3 publishes a year's file only after its first trading day, so
+    a 404 for `current_year` means "no data yet", not a failure. Each year is committed
+    on its own, so a failing year never discards the years already ingested."""
+    for year in years:
+        try:
+            points = b3.download_and_normalize(year)
+        except requests.HTTPError as e:
+            if year == current_year and e.response is not None and e.response.status_code == 404:
+                logger.info("b3: COTAHIST file for %d not published yet; skipping", year)
+                continue
+            raise
+        now = _now_iso()
+        latest_by_ticker = {point.ticker: point for point in sorted(points, key=lambda p: p.date)}
+        for point in latest_by_ticker.values():
+            upsert_series(
+                conn,
+                code=b3.canonical_code(point.ticker),
+                domain=b3.DOMAIN,
+                name=f"{point.ticker} {point.name}",
+                metadata={"ticker": point.ticker, "bdi_code": point.bdi_code, "isin": point.isin, "currency": "BRL"},
+                created_at=now,
+            )
+        upsert_points(
+            conn,
+            (
+                PointRow(
+                    series_code=b3.canonical_code(point.ticker),
+                    date=point.date,
+                    value=point.close,
+                    extra_values=json.dumps(
+                        {
+                            "open": point.open,
+                            "high": point.high,
+                            "low": point.low,
+                            "volume": point.volume,
+                            "trades": point.trades,
+                        }
+                    ),
+                    source_updated_at=now,
+                )
+                for point in points
+            ),
+        )
+        conn.commit()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -136,7 +191,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--source",
-        choices=["treasury-direct", "ptax", "cdi", "all"],
+        choices=["treasury-direct", "ptax", "cdi", "b3", "all"],
         default="all",
         help="Which source to ingest. Each source fails independently.",
     )
@@ -146,7 +201,7 @@ def main() -> None:
         default=None,
         help="Start date (YYYY-MM-DD) for PTAX/CDI ingestion. Defaults to 30 days before today; "
         "pass an earlier date (e.g. 2020-01-01) to backfill on a first run. Ignored by "
-        "treasury-direct, which uses --year/--since-year instead.",
+        "treasury-direct and b3, which use --year/--since-year instead.",
     )
     year_group = parser.add_mutually_exclusive_group()
     year_group.add_argument(
@@ -154,8 +209,9 @@ def main() -> None:
         type=int,
         default=None,
         help="Ingest treasury-direct rows dated (Data Base) in this single calendar year "
-        "only. The source is now one CSV covering full history since 2002 (a single "
-        "download regardless of this flag) — this only filters which rows get written. "
+        "only, and the b3 COTAHIST file of that year. The treasury-direct source is one CSV "
+        "covering full history since 2002 (a single download regardless of this flag) — this "
+        "only filters which rows get written. "
         "Defaults to the current year. Mutually exclusive with --since-year. Ignored by "
         "ptax/cdi.",
     )
@@ -163,14 +219,14 @@ def main() -> None:
         "--since-year",
         type=int,
         default=None,
-        help="Ingest treasury-direct rows dated (Data Base) from this calendar year "
-        "through the current year, inclusive — use to backfill years before the current "
-        "one, e.g. --since-year 2020 (or an early year like 2002 for the full history). "
+        help="Ingest treasury-direct rows dated (Data Base), and one b3 COTAHIST file per "
+        "year, from this calendar year through the current year, inclusive — use to backfill "
+        "years before the current one, e.g. --since-year 2020 (or an early year like 2002 for the full history). "
         "Mutually exclusive with --year. Ignored by ptax/cdi.",
     )
     args = parser.parse_args()
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(_BRASILIA).date()
     since = args.since if args.since is not None else (today - timedelta(days=30)).isoformat()
     until = today.isoformat()
     if args.year is not None:
@@ -179,10 +235,15 @@ def main() -> None:
         years = list(range(args.since_year, today.year + 1))
     else:
         years = [today.year]
+    # In early January also re-fetch last year's b3 file, so a December close B3
+    # republished after the last run of that year is still picked up.
+    b3_years = years
+    if args.year is None and args.since_year is None and today.month == 1 and today.day <= 7:
+        b3_years = [today.year - 1, today.year]
 
     conn = connect(args.db)
 
-    sources = ["treasury-direct", "ptax", "cdi"] if args.source == "all" else [args.source]
+    sources = ["treasury-direct", "ptax", "cdi", "b3"] if args.source == "all" else [args.source]
 
     failed_sources: list[str] = []
     for source in sources:
@@ -193,6 +254,8 @@ def main() -> None:
                 _ingest_ptax(conn, since, until)
             elif source == "cdi":
                 _ingest_cdi(conn, since, until)
+            elif source == "b3":
+                _ingest_b3(conn, b3_years, today.year)
             conn.commit()
         except Exception:
             conn.rollback()
