@@ -64,7 +64,7 @@ Identity scheme, `<DOMAIN>:<IDENTIFIER>`:
   the `portfolio-rebalancer` repo (`SPEC_TESOURO_DIRETO_CATALOGO_OFICIAL.md`); the two projects are
   fully decoupled otherwise.
 - PTAX: `PTAX:USD:BUY` / `PTAX:USD:SELL`.
-- CDI: `CDI:SGS:4391` (the BCB SGS series number, already a stable public identifier).
+- CDI: `CDI:SGS:4391` (monthly) and `CDI:SGS:12` (daily) (the BCB SGS series number, already a stable public identifier).
 
 **Money/decimal discipline (non-negotiable, per spec §6):** every price/rate value is stored as SQL
 `TEXT`, never `REAL` — floats must never enter the historical record. A missing or non-numeric

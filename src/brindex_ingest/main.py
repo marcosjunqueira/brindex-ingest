@@ -103,29 +103,43 @@ def _ingest_ptax(conn, since: str, until: str) -> None:
 
 
 def _ingest_cdi(conn, since: str, until: str) -> None:
-    points = cdi.download_and_normalize(since, until)
-    now = _now_iso()
-    upsert_series(
-        conn,
-        code=cdi.CODE,
-        domain="cdi",
-        name="CDI",
-        metadata={"sgs_series": 4391},
-        created_at=now,
-    )
-    upsert_points(
-        conn,
-        (
-            PointRow(
-                series_code=cdi.CODE,
-                date=point.date,
-                value=point.value,
-                extra_values=None,
-                source_updated_at=now,
+    """Both SGS CDI series: 4391 (monthly) and 12 (daily). The daily series is what lets
+    a consumer accrue CDI up to the latest business day instead of the last month. Each
+    series is committed on its own, so a failure in one never discards the other; any
+    failure still marks the `cdi` source as failed."""
+    failed: list[str] = []
+    for code, (sgs_series, name) in cdi.SERIES.items():
+        try:
+            points = cdi.download_and_normalize(since, until, series=sgs_series)
+            now = _now_iso()
+            upsert_series(
+                conn,
+                code=code,
+                domain="cdi",
+                name=name,
+                metadata={"sgs_series": sgs_series},
+                created_at=now,
             )
-            for point in points
-        ),
-    )
+            upsert_points(
+                conn,
+                (
+                    PointRow(
+                        series_code=code,
+                        date=point.date,
+                        value=point.value,
+                        extra_values=None,
+                        source_updated_at=now,
+                    )
+                    for point in points
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            failed.append(code)
+            logger.exception("cdi: ingestion failed for %s; continuing with the other series", code)
+    if failed:
+        raise RuntimeError(f"cdi: failed series: {', '.join(failed)}")
 
 
 def _ingest_b3(conn, years: list[int], current_year: int) -> None:

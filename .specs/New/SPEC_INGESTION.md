@@ -26,7 +26,7 @@ browser on every use (`cornerstone-app/src/storage/bcb.ts`) with no persisted hi
 | Tesouro Direto | `https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/precotaxatesourodireto.csv` | CSV, `;`-delimited, `latin-1`, decimal comma (confirmed 2026-09-09) | **Source changed 2026-09-09 — see §2.1a.** One file, all title types, full history since January 2002 (~176k rows) |
 | PTAX | BCB Olinda OData, `CotacaoDolarPeriodo` | JSON | Same endpoint already used client-side by `cornerstone-app/src/storage/bcb.ts:100-104` |
 | B3 (stocks, FIIs, ETFs, BDRs) | `https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A<YYYY>.ZIP` | ZIP holding one fixed-width `latin-1` TXT, 245 chars per record | Added 2026-09-29, see §2.2. Verified live 2026-09-28: 200 for 2025 (~89 MB) and 2026 (~80 MB), 404 for a year not yet published |
-| CDI | BCB SGS, `bcdata.sgs.4391` | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139`. Confirmed live 2026-09-09: series 4391 is **monthly**, one entry per calendar month dated the 1st (`{"data": "01/09/2026", "valor": "0.26"}`) — not daily, despite "CDI" evoking a daily rate. |
+| CDI | BCB SGS, `bcdata.sgs.4391` (monthly) and `bcdata.sgs.12` (daily, % per business day; the API caps queries at 10-year windows, so long backfills are split) | JSON | Same endpoint already used by `cornerstone-app/src/storage/bcb.ts:137-139`. Confirmed live 2026-09-09: series 4391 is **monthly**, one entry per calendar month dated the 1st (`{"data": "01/09/2026", "valor": "0.26"}`) — not daily, despite "CDI" evoking a daily rate. |
 
 Each source is ingested and can fail **independently** — a Tesouro Direto CDN outage must not
 prevent PTAX/CDI from updating, and vice versa. `main.py --source` already models this (one source at
@@ -197,7 +197,7 @@ does not retroactively relax an existing table's `NOT NULL`) — there is no mig
   other pending renames noted in `CLAUDE.md`.
 - PTAX: `PTAX:USD:BUY` / `PTAX:USD:SELL` (previously `COMPRA` / `VENDA` — renamed for the
   English-everywhere pass; this is a stored-data breaking change, see note below).
-- CDI: `CDI:SGS:4391` (the BCB SGS series number is already a stable, public identifier).
+- CDI: `CDI:SGS:4391` (monthly) and `CDI:SGS:12` (daily) (the BCB SGS series number is already a stable, public identifier).
 - B3: `B3:<TICKER>` (e.g. `B3:PETR4`, `B3:HGLG11`, `B3:BOVA11`), `domain` `b3`. The ticker is B3's
   own `CODNEG`, already a stable public identifier.
 
