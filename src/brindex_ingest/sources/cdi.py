@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 CODE = "CDI:SGS:4391"  # monthly, % per month
 DAILY_CODE = "CDI:SGS:12"  # daily (business days), % per day
 
-# SGS series number per code, in ingestion order.
-SERIES = {CODE: 4391, DAILY_CODE: 12}
+# (SGS series number, display name) per code, in ingestion order.
+SERIES = {CODE: (4391, "CDI"), DAILY_CODE: (12, "CDI daily")}
 
 _SGS_URL = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{series}/dados"
 

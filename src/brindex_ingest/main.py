@@ -107,9 +107,8 @@ def _ingest_cdi(conn, since: str, until: str) -> None:
     a consumer accrue CDI up to the latest business day instead of the last month. Each
     series is committed on its own, so a failure in one never discards the other; any
     failure still marks the `cdi` source as failed."""
-    names = {cdi.CODE: "CDI", cdi.DAILY_CODE: "CDI daily"}
     failed: list[str] = []
-    for code, sgs_series in cdi.SERIES.items():
+    for code, (sgs_series, name) in cdi.SERIES.items():
         try:
             points = cdi.download_and_normalize(since, until, series=sgs_series)
             now = _now_iso()
@@ -117,7 +116,7 @@ def _ingest_cdi(conn, since: str, until: str) -> None:
                 conn,
                 code=code,
                 domain="cdi",
-                name=names[code],
+                name=name,
                 metadata={"sgs_series": sgs_series},
                 created_at=now,
             )
