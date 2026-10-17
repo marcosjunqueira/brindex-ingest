@@ -15,7 +15,7 @@ for the design.
 |---|---|---|
 | Tesouro Direto | `tesourotransparente.gov.br` open-data CSV | CSV |
 | PTAX | BCB Olinda OData | JSON |
-| CDI | BCB SGS series 4391 | JSON |
+| CDI | BCB SGS series 4391 (monthly, `CDI:SGS:4391`) and 12 (daily, `CDI:SGS:12`) | JSON |
 | B3 (stocks, FIIs, ETFs, BDRs) | B3 COTAHIST annual file | ZIP of fixed-width TXT |
 
 ## Running

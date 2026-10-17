@@ -103,29 +103,33 @@ def _ingest_ptax(conn, since: str, until: str) -> None:
 
 
 def _ingest_cdi(conn, since: str, until: str) -> None:
-    points = cdi.download_and_normalize(since, until)
-    now = _now_iso()
-    upsert_series(
-        conn,
-        code=cdi.CODE,
-        domain="cdi",
-        name="CDI",
-        metadata={"sgs_series": 4391},
-        created_at=now,
-    )
-    upsert_points(
-        conn,
-        (
-            PointRow(
-                series_code=cdi.CODE,
-                date=point.date,
-                value=point.value,
-                extra_values=None,
-                source_updated_at=now,
-            )
-            for point in points
-        ),
-    )
+    """Both SGS CDI series: 4391 (monthly) and 12 (daily). The daily series is what lets
+    a consumer accrue CDI up to the latest business day instead of the last month."""
+    names = {cdi.CODE: "CDI", cdi.DAILY_CODE: "CDI daily"}
+    for code, sgs_series in cdi.SERIES.items():
+        points = cdi.download_and_normalize(since, until, series=sgs_series)
+        now = _now_iso()
+        upsert_series(
+            conn,
+            code=code,
+            domain="cdi",
+            name=names[code],
+            metadata={"sgs_series": sgs_series},
+            created_at=now,
+        )
+        upsert_points(
+            conn,
+            (
+                PointRow(
+                    series_code=code,
+                    date=point.date,
+                    value=point.value,
+                    extra_values=None,
+                    source_updated_at=now,
+                )
+                for point in points
+            ),
+        )
 
 
 def _ingest_b3(conn, years: list[int], current_year: int) -> None:
